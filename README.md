@@ -1,4 +1,7 @@
 # quickbridge
+ 
+> [!WARNING]
+> `quickbridge` is currently in an alpha stage. Expect bugs and breaking changes while the CLI contract is being stabilized.
 
 `quickbridge` is a macOS-first CLI that relays a media URL through `ffmpeg`,
 serves a stable local HLS stream, opens that stream in QuickTime Player, and
@@ -13,12 +16,6 @@ lets you jump to new timestamps from the terminal without quitting QuickTime.
 
 ## Install
 
-Install from crates.io after the first public release:
-
-```console
-$ cargo install quickbridge
-```
-
 Install from the local checkout during development:
 
 ```console
@@ -28,6 +25,8 @@ $ cargo install --path .
 Tagged release builds are also published on GitHub:
 
 - [GitHub Releases](https://github.com/DG02002/quickbridge/releases)
+
+Homebrew support is coming soon.
 
 ## Usage
 
