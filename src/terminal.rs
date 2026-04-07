@@ -486,7 +486,7 @@ impl LivePrompt {
         self.last_ansi_lines.clear();
         self.rendered_lines = 0;
         self.cursor_on_input_line = false;
-        
+
         Ok(())
     }
 

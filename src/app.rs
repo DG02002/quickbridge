@@ -289,7 +289,11 @@ pub async fn run(cli: Cli) -> Result<RunOutcome> {
     }
     start_progress.complete(2)?;
     start_progress.finish()?;
-    println!("{} {}", emphasize("[FFMPEG]"), muted(&playback.relay_command));
+    println!(
+        "{} {}",
+        emphasize("[FFMPEG]"),
+        muted(&playback.relay_command)
+    );
     println!("{} {}", emphasize("[SERVER]"), muted(&stream_url));
 
     if requested_start_at != Timecode::ZERO && actual_start_at == Timecode::ZERO {
