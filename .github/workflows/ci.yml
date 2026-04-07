@@ -18,8 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - macos-latest
+          - macos-26
 
     steps:
       - name: Check out the repository
@@ -44,9 +43,9 @@ jobs:
         run: cargo test
 
       - name: Check packaging
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'macos-26'
         run: cargo package --allow-dirty
 
       - name: Dry-run publish
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'macos-26'
         run: cargo publish --dry-run
