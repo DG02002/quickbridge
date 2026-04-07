@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Check the workspace
+        run: cargo check --all-targets --all-features
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Check packaging
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo package --allow-dirty
+
+      - name: Dry-run publish
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo publish --dry-run
