@@ -528,19 +528,24 @@ impl TelemetryTracker {
         current_time: Timecode,
         now: Instant,
     ) -> Result<StreamTelemetry> {
-        let storage_bytes = scan_storage(root).await?;
+        let (storage_bytes, newly_written_bytes) = self.scan_storage(root).await?;
         let buffer_ahead = read_buffer_ahead(playlist_path, current_time).await?;
-        let download_bytes_per_second = self.record_download_rate(root, now).await?;
+        self.cumulative_bytes_written = self
+            .cumulative_bytes_written
+            .saturating_add(newly_written_bytes);
+        let relay_write_bytes_per_second = self.record_write_rate(now);
         Ok(StreamTelemetry::new(
-            download_bytes_per_second,
+            relay_write_bytes_per_second,
             storage_bytes,
             buffer_ahead,
         ))
     }
 
-    async fn record_download_rate(&mut self, root: &Path, now: Instant) -> Result<u64> {
+    async fn scan_storage(&mut self, root: &Path) -> Result<(u64, u64)> {
         let mut current_sizes = HashMap::new();
         let mut pending = vec![root.to_path_buf()];
+        let mut storage_bytes = 0_u64;
+        let mut newly_written_bytes = 0_u64;
 
         while let Some(next) = pending.pop() {
             let mut entries = match fs::read_dir(&next).await {
@@ -556,21 +561,24 @@ impl TelemetryTracker {
                     pending.push(path);
                 } else if metadata.is_file() {
                     let size = metadata.len();
+                    storage_bytes = storage_bytes.saturating_add(size);
                     let previous = self.observed_sizes.get(&path).copied().unwrap_or(0);
                     let written_now = if size >= previous {
                         size - previous
                     } else {
                         size
                     };
-                    self.cumulative_bytes_written =
-                        self.cumulative_bytes_written.saturating_add(written_now);
+                    newly_written_bytes = newly_written_bytes.saturating_add(written_now);
                     current_sizes.insert(path, size);
                 }
             }
         }
 
         self.observed_sizes = current_sizes;
+        Ok((storage_bytes, newly_written_bytes))
+    }
 
+    fn record_write_rate(&mut self, now: Instant) -> u64 {
         let bytes_per_second = if let Some(previous) = self.last_sample {
             let elapsed = now.saturating_duration_since(previous.observed_at);
             if elapsed.is_zero() {
@@ -590,32 +598,8 @@ impl TelemetryTracker {
             observed_at: now,
         });
 
-        Ok(bytes_per_second)
+        bytes_per_second
     }
-}
-
-async fn scan_storage(root: &Path) -> Result<u64> {
-    let mut total = 0_u64;
-    let mut pending = vec![root.to_path_buf()];
-
-    while let Some(next) = pending.pop() {
-        let mut entries = match fs::read_dir(&next).await {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.into()),
-        };
-
-        while let Some(entry) = entries.next_entry().await? {
-            let metadata = entry.metadata().await?;
-            if metadata.is_dir() {
-                pending.push(entry.path());
-            } else if metadata.is_file() {
-                total = total.saturating_add(metadata.len());
-            }
-        }
-    }
-
-    Ok(total)
 }
 
 async fn read_buffer_ahead(playlist_path: &Path, current_time: Timecode) -> Result<Timecode> {
@@ -787,7 +771,7 @@ impl TestDriver {
 mod tests {
     use super::{
         JumpEvent, JumpStep, LaunchEvent, LaunchStep, PlaybackCoordinator, PlaybackMode,
-        PlayerState, Result, StartRequest, TestDriver,
+        PlayerState, Result, StartRequest, TelemetryTracker, TestDriver,
     };
     use crate::RuntimeError;
     use crate::ffmpeg::FfmpegRunner;
@@ -795,6 +779,27 @@ mod tests {
         ProgressEvent, ProgressSink, SimulationScenario, StreamSelection, Timecode, VideoStream,
     };
     use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn telemetry_counts_storage_and_writes_in_one_pass() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("segment.m4s");
+        tokio::fs::write(&path, vec![0_u8; 100]).await.unwrap();
+        let mut tracker = TelemetryTracker::default();
+        let (storage, written) = tracker.scan_storage(root.path()).await.unwrap();
+        assert_eq!((storage, written), (100, 100));
+
+        tokio::fs::write(&path, vec![0_u8; 160]).await.unwrap();
+        let (storage, written) = tracker.scan_storage(root.path()).await.unwrap();
+        assert_eq!((storage, written), (160, 60));
+
+        tokio::fs::remove_file(&path).await.unwrap();
+        tokio::fs::write(root.path().join("replacement.m4s"), vec![0_u8; 40])
+            .await
+            .unwrap();
+        let (storage, written) = tracker.scan_storage(root.path()).await.unwrap();
+        assert_eq!((storage, written), (40, 40));
+    }
 
     struct RecordingSink<E> {
         events: Vec<E>,

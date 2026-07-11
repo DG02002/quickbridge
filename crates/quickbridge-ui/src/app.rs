@@ -660,8 +660,8 @@ impl RunningState {
                 )
             ),
             format!(
-                "Download speed     | {}",
-                format_bytes_per_second(self.snapshot.telemetry().download_bytes_per_second())
+                "Relay write rate   | {}",
+                format_bytes_per_second(self.snapshot.telemetry().relay_write_bytes_per_second())
             ),
             format!(
                 "Buffer ahead       | {}",

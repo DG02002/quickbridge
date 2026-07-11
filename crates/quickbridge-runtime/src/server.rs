@@ -12,7 +12,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 use tokio::{
     fs,
@@ -20,23 +20,27 @@ use tokio::{
     sync::{RwLock, oneshot},
     task::JoinHandle,
 };
+use tokio_util::io::ReaderStream;
 use tracing::debug;
 
 #[derive(Debug, Default)]
 pub struct ActiveSession {
     dir: RwLock<Option<PathBuf>>,
     playback: RwLock<PlaybackTracker>,
+    playlist_cache: RwLock<Option<PlaylistCache>>,
 }
 
 impl ActiveSession {
     pub async fn set_active_dir(&self, dir: PathBuf) {
         *self.dir.write().await = Some(dir);
         self.playback.write().await.reset();
+        *self.playlist_cache.write().await = None;
     }
 
     pub async fn clear(&self) {
         *self.dir.write().await = None;
         self.playback.write().await.reset();
+        *self.playlist_cache.write().await = None;
     }
 
     pub async fn active_dir(&self) -> Option<PathBuf> {
@@ -51,12 +55,56 @@ impl ActiveSession {
             return;
         };
 
-        let Ok(Some(segment)) = resolve_segment(active_dir.as_path(), segment_name).await else {
+        let Ok(Some(segment)) = self
+            .resolve_segment(active_dir.as_path(), segment_name)
+            .await
+        else {
             return;
         };
 
         self.playback.write().await.observe(segment);
     }
+
+    async fn resolve_segment(
+        &self,
+        active_dir: &Path,
+        segment_name: &str,
+    ) -> Result<Option<SegmentObservation>> {
+        let playlist_path = active_dir.join("stream.m3u8");
+        let metadata = match fs::metadata(&playlist_path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(RuntimeError::ReadTrackingPlaylist { source }),
+        };
+        let version = PlaylistVersion {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        };
+        if let Some(cache) = self.playlist_cache.read().await.as_ref()
+            && cache.version == version
+        {
+            return Ok(cache.segments.get(segment_name).copied());
+        }
+        let playlist = fs::read_to_string(&playlist_path)
+            .await
+            .map_err(|source| RuntimeError::ReadTrackingPlaylist { source })?;
+        let segments = parse_segment_map(&playlist);
+        let observation = segments.get(segment_name).copied();
+        *self.playlist_cache.write().await = Some(PlaylistCache { version, segments });
+        Ok(observation)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PlaylistVersion {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+#[derive(Debug)]
+struct PlaylistCache {
+    version: PlaylistVersion,
+    segments: HashMap<String, SegmentObservation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,17 +217,43 @@ async fn serve_asset_impl(
         return Err(response(StatusCode::NOT_FOUND, "not found"));
     };
 
-    match fs::read(&path).await {
-        Ok(bytes) => {
+    if request_path.ends_with(".m3u8") {
+        return match fs::read(&path).await {
+            Ok(bytes) => Ok(asset_response(
+                Body::from(bytes.clone()),
+                &path,
+                bytes.len() as u64,
+                "no-cache",
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(response(StatusCode::NOT_FOUND, "not found"))
+            }
+            Err(_) => Err(response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "unable to read the stream asset",
+            )),
+        };
+    }
+    match fs::File::open(&path).await {
+        Ok(file) => {
+            let len = match file.metadata().await {
+                Ok(metadata) => metadata.len(),
+                Err(_) => {
+                    return Err(response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "unable to read the stream asset",
+                    ));
+                }
+            };
             if is_segment_request(request_path) {
                 state.note_segment_request(request_path).await;
             }
-            let mut response = Response::new(Body::from(bytes));
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                header::HeaderValue::from_static(content_type(&path)),
-            );
-            Ok(response)
+            Ok(asset_response(
+                Body::from_stream(ReaderStream::new(file)),
+                &path,
+                len,
+                "public, max-age=31536000, immutable",
+            ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Err(response(StatusCode::NOT_FOUND, "not found"))
@@ -191,27 +265,25 @@ async fn serve_asset_impl(
     }
 }
 
+fn asset_response(
+    body: Body,
+    path: &Path,
+    len: u64,
+    cache_control: &'static str,
+) -> Response<Body> {
+    Response::builder()
+        .header(header::CONTENT_TYPE, content_type(path))
+        .header(header::CONTENT_LENGTH, len)
+        .header(header::CACHE_CONTROL, cache_control)
+        .body(body)
+        .expect("valid asset response")
+}
+
 fn is_segment_request(request_path: &str) -> bool {
     Path::new(request_path)
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| matches!(ext, "m4s" | "ts"))
-}
-
-async fn resolve_segment(
-    active_dir: &Path,
-    segment_name: &str,
-) -> Result<Option<SegmentObservation>> {
-    let playlist_path = active_dir.join("stream.m3u8");
-    let playlist = match fs::read_to_string(&playlist_path).await {
-        Ok(playlist) => playlist,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(RuntimeError::ReadTrackingPlaylist { source: error });
-        }
-    };
-
-    Ok(parse_segment_map(&playlist).remove(segment_name))
 }
 
 fn parse_segment_map(playlist: &str) -> HashMap<String, SegmentObservation> {
@@ -307,9 +379,10 @@ pub fn resolve_request_path(active_dir: &Path, request_path: &str) -> Option<Pat
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_extinf_seconds, parse_segment_index, parse_segment_map, parse_target_duration,
-        resolve_request_path,
+        ActiveSession, parse_extinf_seconds, parse_segment_index, parse_segment_map,
+        parse_target_duration, resolve_request_path, serve_asset_impl,
     };
+    use axum::{body::to_bytes, http::header};
     use quickbridge_core::Timecode;
     use std::path::Path;
 
@@ -353,5 +426,116 @@ mod tests {
         );
         assert_eq!(parse_extinf_seconds("#EXTINF:1.2,").unwrap(), 2);
         assert_eq!(parse_segment_index("segment_0001_00042.m4s").unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn streams_media_with_metadata_and_keeps_playlists_uncached() {
+        let root = tempfile::tempdir().unwrap();
+        let state = ActiveSession::default();
+        state.set_active_dir(root.path().to_path_buf()).await;
+        let bytes = vec![0x5a; 2 * 1024 * 1024];
+        tokio::fs::write(root.path().join("segment_00001.m4s"), &bytes)
+            .await
+            .unwrap();
+        tokio::fs::write(root.path().join("stream.m3u8"), "#EXTM3U\n")
+            .await
+            .unwrap();
+
+        let response = serve_asset_impl(&state, "/segment_00001.m4s")
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()[header::CONTENT_LENGTH],
+            bytes.len().to_string()
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "video/iso.segment"
+        );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), bytes.len() + 1)
+                .await
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
+
+        let playlist = serve_asset_impl(&state, "/stream.m3u8").await.unwrap();
+        assert_eq!(playlist.headers()[header::CACHE_CONTROL], "no-cache");
+        assert!(serve_asset_impl(&state, "/missing.m4s").await.is_err());
+        assert!(serve_asset_impl(&state, "/../secret.m4s").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn caches_segment_map_until_playlist_version_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let state = ActiveSession::default();
+        state.set_active_dir(root.path().to_path_buf()).await;
+        let path = root.path().join("stream.m3u8");
+        tokio::fs::write(&path, "#EXTM3U\n#EXTINF:2,\nsegment_00001.m4s\n")
+            .await
+            .unwrap();
+        assert!(
+            state
+                .resolve_segment(root.path(), "segment_00001.m4s")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let first_version = state
+            .playlist_cache
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .version
+            .len;
+        assert!(
+            state
+                .resolve_segment(root.path(), "segment_00001.m4s")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            state
+                .playlist_cache
+                .read()
+                .await
+                .as_ref()
+                .unwrap()
+                .version
+                .len,
+            first_version
+        );
+
+        tokio::fs::write(
+            &path,
+            "#EXTM3U\n#EXTINF:2,\nsegment_00002.m4s\n#EXT-X-ENDLIST\n",
+        )
+        .await
+        .unwrap();
+        assert!(
+            state
+                .resolve_segment(root.path(), "segment_00002.m4s")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_ne!(
+            state
+                .playlist_cache
+                .read()
+                .await
+                .as_ref()
+                .unwrap()
+                .version
+                .len,
+            first_version
+        );
     }
 }

@@ -441,7 +441,7 @@ fn playback_status_line(running: &RunningState) -> Line<'static> {
         Span::styled(current_time, accent_style()),
         Span::styled("  •  ", detail_style()),
         Span::styled(
-            format_bytes_per_second(running.snapshot.telemetry().download_bytes_per_second()),
+            format_bytes_per_second(running.snapshot.telemetry().relay_write_bytes_per_second()),
             success_style(),
         ),
         Span::styled("  •  buffer ", detail_style()),

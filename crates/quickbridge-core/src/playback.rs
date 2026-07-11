@@ -43,22 +43,26 @@ impl StartOutcome {
 /// Live telemetry derived from the current relay session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StreamTelemetry {
-    download_bytes_per_second: u64,
+    relay_write_bytes_per_second: u64,
     storage_bytes: u64,
     buffer_ahead: Timecode,
 }
 
 impl StreamTelemetry {
-    pub fn new(download_bytes_per_second: u64, storage_bytes: u64, buffer_ahead: Timecode) -> Self {
+    pub fn new(
+        relay_write_bytes_per_second: u64,
+        storage_bytes: u64,
+        buffer_ahead: Timecode,
+    ) -> Self {
         Self {
-            download_bytes_per_second,
+            relay_write_bytes_per_second,
             storage_bytes,
             buffer_ahead,
         }
     }
 
-    pub fn download_bytes_per_second(self) -> u64 {
-        self.download_bytes_per_second
+    pub fn relay_write_bytes_per_second(self) -> u64 {
+        self.relay_write_bytes_per_second
     }
 
     pub fn storage_bytes(self) -> u64 {
