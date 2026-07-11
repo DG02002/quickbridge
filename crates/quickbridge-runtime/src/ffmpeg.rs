@@ -10,8 +10,14 @@ use tracing::debug;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const HLS_SEGMENT_SECONDS: u64 = 1;
-const HLS_WINDOW_SEGMENTS: u64 = 6;
+// Keep a bounded ten-second lead, then allow modest catch-up after stalls.
+const INPUT_READ_RATE: f32 = 1.0;
+const INPUT_INITIAL_BURST_SECONDS: u64 = 10;
+const INPUT_CATCHUP_RATE: f32 = 1.5;
+const HLS_SEGMENT_SECONDS: u64 = 2;
+// About 24 seconds, or roughly 255 MB at 85.2 Mb/s plus deletion grace.
+const HLS_WINDOW_SEGMENTS: u64 = 12;
+const READY_MEDIA_SEGMENTS: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct FfmpegRunner {
@@ -124,13 +130,22 @@ fn build_args(
     selection: &StreamSelection,
 ) -> Result<Vec<OsString>> {
     let packaging = selection.video_packaging()?;
-    let mut args = vec![OsString::from("-y"), OsString::from("-re")];
+    let mut args = vec![OsString::from("-y")];
     if start_at.as_seconds() > 0 {
         args.push(OsString::from("-ss"));
         args.push(OsString::from(start_at.as_seconds().to_string()));
     }
 
-    args.extend([OsString::from("-i"), OsString::from(source_url)]);
+    args.extend([
+        OsString::from("-readrate"),
+        OsString::from(INPUT_READ_RATE.to_string()),
+        OsString::from("-readrate_initial_burst"),
+        OsString::from(INPUT_INITIAL_BURST_SECONDS.to_string()),
+        OsString::from("-readrate_catchup"),
+        OsString::from(INPUT_CATCHUP_RATE.to_string()),
+        OsString::from("-i"),
+        OsString::from(source_url),
+    ]);
     args.extend([
         OsString::from("-map"),
         OsString::from(format!("0:{}", selection.video_stream_index())),
@@ -150,8 +165,6 @@ fn build_args(
             args.extend([OsString::from("-strict"), OsString::from("unofficial")]);
         }
     }
-    args.push(OsString::from("-copyinkf"));
-
     match selection.audio_handling() {
         Some(AudioHandling::Copy) => {
             args.extend([OsString::from("-c:a"), OsString::from("copy")]);
@@ -174,7 +187,7 @@ fn build_args(
         OsString::from("-hls_list_size"),
         OsString::from(HLS_WINDOW_SEGMENTS.to_string()),
         OsString::from("-hls_flags"),
-        OsString::from("delete_segments+omit_endlist+split_by_time+temp_file"),
+        OsString::from("delete_segments+omit_endlist+temp_file"),
         OsString::from("-hls_segment_filename"),
         session.segment_pattern.as_os_str().to_os_string(),
         session.playlist_path.as_os_str().to_os_string(),
@@ -234,9 +247,10 @@ pub async fn has_playable_output(session: &SessionPaths) -> Result<bool> {
     }
 
     let playlist = fs::read_to_string(&session.playlist_path).await?;
-    let Some(first_segment) = playlist_media_entries(&playlist).into_iter().next() else {
+    let media_segments = playlist_media_entries(&playlist);
+    if media_segments.len() < READY_MEDIA_SEGMENTS {
         return Ok(false);
-    };
+    }
 
     if let Some(init_file) = playlist_init_file(&playlist)
         && !is_nonempty_file(&session.dir.join(init_file)).await?
@@ -244,7 +258,12 @@ pub async fn has_playable_output(session: &SessionPaths) -> Result<bool> {
         return Ok(false);
     }
 
-    is_nonempty_file(&session.dir.join(first_segment)).await
+    for segment in media_segments.iter().take(READY_MEDIA_SEGMENTS) {
+        if !is_nonempty_file(&session.dir.join(segment)).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn is_nonempty_file(path: &Path) -> Result<bool> {
@@ -316,7 +335,7 @@ mod tests {
         };
         tokio::fs::write(
             &session.playlist_path,
-            "#EXTM3U\n#EXT-X-MAP:URI=\"init_0001.mp4\"\n#EXTINF:1.0,\nsegment_0001_00001.m4s\n",
+            "#EXTM3U\n#EXT-X-MAP:URI=\"init_0001.mp4\"\n#EXTINF:2.0,\nsegment_0001_00001.m4s\n#EXTINF:2.0,\nsegment_0001_00002.m4s\n#EXTINF:2.0,\nsegment_0001_00003.m4s\n",
         )
         .await
         .unwrap();
@@ -324,6 +343,14 @@ mod tests {
             .await
             .unwrap();
         tokio::fs::write(session.segment_path(1), "segment")
+            .await
+            .unwrap();
+        assert!(!has_playable_output(&session).await.unwrap());
+        tokio::fs::write(session.segment_path(2), "segment")
+            .await
+            .unwrap();
+        assert!(!has_playable_output(&session).await.unwrap());
+        tokio::fs::write(session.segment_path(3), "segment")
             .await
             .unwrap();
         assert!(has_playable_output(&session).await.unwrap());
@@ -365,24 +392,32 @@ mod tests {
         assert!(args.windows(2).any(|window| window == ["-map", "0:5"]));
         assert!(args.windows(2).any(|window| window == ["-c:v", "copy"]));
         assert!(args.windows(2).any(|window| window == ["-c:a", "alac"]));
-        assert!(args.iter().any(|arg| arg == "-copyinkf"));
-        assert!(args.iter().any(|arg| arg == "-re"));
+        assert!(!args.iter().any(|arg| arg == "-copyinkf"));
+        assert!(!args.iter().any(|arg| arg == "-re"));
+        let input_index = args.iter().position(|arg| arg == "-i").unwrap();
+        for (option, value) in [
+            ("-readrate", "1"),
+            ("-readrate_initial_burst", "10"),
+            ("-readrate_catchup", "1.5"),
+        ] {
+            let option_index = args.iter().position(|arg| arg == option).unwrap();
+            assert!(option_index < input_index);
+            assert_eq!(args[option_index + 1], value);
+        }
         assert!(
             args.windows(2)
                 .any(|window| window == ["-hls_fmp4_init_filename", "init_0001.mp4"])
         );
-        assert!(args.windows(2).any(|window| window == ["-hls_time", "1"]));
+        assert!(args.windows(2).any(|window| window == ["-hls_time", "2"]));
         assert!(
             args.windows(2)
-                .any(|window| window == ["-hls_list_size", "6"])
+                .any(|window| window == ["-hls_list_size", "12"])
         );
-        assert!(args.windows(2).any(|window| {
-            window
-                == [
-                    "-hls_flags",
-                    "delete_segments+omit_endlist+split_by_time+temp_file",
-                ]
-        }));
+        assert!(
+            args.windows(2).any(|window| {
+                window == ["-hls_flags", "delete_segments+omit_endlist+temp_file"]
+            })
+        );
         assert_eq!(
             selection.audio_handling(),
             Some(&AudioHandling::TranscodeAlac)
@@ -482,8 +517,10 @@ for arg in "$@"; do
 done
 mkdir -p "$(dirname "$playlist")"
 printf 'init' > "$(dirname "$playlist")/init_0001.mp4"
-printf '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MAP:URI="init_0001.mp4"\n#EXTINF:1.0,\nsegment_0001_00001.m4s\n' > "$playlist"
+printf '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MAP:URI="init_0001.mp4"\n#EXTINF:2.0,\nsegment_0001_00001.m4s\n#EXTINF:2.0,\nsegment_0001_00002.m4s\n#EXTINF:2.0,\nsegment_0001_00003.m4s\n' > "$playlist"
 printf 'segment' > "$(printf "$segment" 1)"
+printf 'segment' > "$(printf "$segment" 2)"
+printf 'segment' > "$(printf "$segment" 3)"
 sleep 30
 "#,
         );
