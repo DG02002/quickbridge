@@ -90,6 +90,9 @@ impl FfmpegRunner {
 
         let mut command = Command::new(&self.binary);
         command.args(&args);
+        // Failed readiness checks drop the staged process; do not leave an
+        // orphaned relay consuming the remote source in the background.
+        command.kill_on_drop(true);
         command.stdout(Stdio::null());
         command.stdin(Stdio::null());
         if self.verbose {
@@ -160,6 +163,9 @@ fn build_args(
     args.extend([OsString::from("-sn"), OsString::from("-dn")]);
     args.extend([OsString::from("-c:v"), OsString::from("copy")]);
     if let VideoPackaging::Hevc { tag, unofficial } = packaging {
+        // Populate the out-of-band VPS/SPS/PPS required by hvc1/dvh1 when
+        // stream-copying sources that carry parameter sets in-band.
+        args.extend([OsString::from("-bsf:v"), OsString::from("hevc_metadata")]);
         args.extend([OsString::from("-tag:v"), OsString::from(tag)]);
         if unofficial {
             args.extend([OsString::from("-strict"), OsString::from("unofficial")]);
@@ -469,6 +475,12 @@ mod tests {
                     .find(|pair| pair[0] == "-tag:v")
                     .map(|pair| pair[1].as_str()),
                 tag
+            );
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "-bsf:v")
+                    .map(|pair| pair[1].as_str()),
+                tag.map(|_| "hevc_metadata")
             );
             if tag == Some("dvh1") {
                 assert!(
