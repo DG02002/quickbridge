@@ -1,0 +1,28 @@
+---
+source: crates/quickbridge-ui/src/render/mod.rs
+expression: help
+---
+quickbridge v0.1.0                                                              
+                                                                                
+                                                                                
+Source                                                                          
+https://example.com/video.mkv                                                   
+              ╭ Help ────────────────────────────────────────────╮              
+> status      │Enter a time or command                           │              
+○ Preparing th│HH:MM:SS  Jump to a time                          │              
+○ Waiting for │MM:SS     Jump to a time                          │              
+⠋ Refreshing Q│SS        Jump to a time                          │              
+○ Cleaning up │+MM:SS    Jump forward from the current time      │              
+              │-MM:SS    Jump back from the current time         │              
+Tracks        │reopen    Reopen the stream in QuickTime Player   │              
+Video  H.264 •│status    Show stream and playback details        │              
+Audio  No audi│details   Show stream and playback details        │              
+              │help      Show commands                           │              
+              │quit      Close QuickTime Player and Quickbridge  │              
+Player        │                                                  │              
+00:00:12 / 00:│Esc  Close                                        │              
+Buffer 00:00:0╰──────────────────────────────────────────────────╯              
+╭ Input ───────────────────────────────────────────────────────────────────────╮
+│> status▏                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Enter run  •  PgUp/PgDn activity  •  Esc clear/close  •  Ctrl+C quit

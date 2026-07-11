@@ -1,12 +1,25 @@
 ---
 source: crates/quickbridge-ui/src/render/mod.rs
-assertion_line: 824
 expression: contents
 ---
-quickbridge 0.1.0                                                                                                       
+quickbridge v0.1.0                                                                                                      
                                                                                                                         
-Select tracks                                                                                                           
-▸ Audio                                                                                                                 
+                                                                                                                        
+Source                                                                                                                  
+Enter a direct media URL below                                                                                          
+                                                                                                                        
+Activity                                                                                                                
+No activity yet.                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+Audio                                                                                                                   
   Unknown language • AAC • default                                                                                      
   Unknown language • AAC                                                                                                
   Unknown language • AAC                                                                                                
@@ -25,21 +38,7 @@ Select tracks
   Unknown language • AAC                                                                                                
   Unknown language • AAC                                                                                                
 › Unknown language • AAC                                                                                                
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-↑↓ choose • Tab switch section • Enter play
+╭ Input ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Use ↑ or ↓ to select a track, then press Enter                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+↑↓ choose  •  Enter play  •  Tab switch

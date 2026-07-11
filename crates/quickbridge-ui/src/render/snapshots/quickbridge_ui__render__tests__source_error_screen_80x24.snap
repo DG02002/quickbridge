@@ -1,18 +1,28 @@
 ---
 source: crates/quickbridge-ui/src/render/mod.rs
-assertion_line: 908
 expression: contents
 ---
-quickbridge 0.1.0                                                               
+quickbridge v0.1.0                                                              
                                                                                 
-Couldn't prepare source                                                         
-! ffprobe couldn't inspect this source.                                         
                                                                                 
 Source                                                                          
 https://example.com/broken.mkv                                                  
                                                                                 
-Choose an action                                                                
-R Retry • E Edit URL • Q Quit                                                   
+╭ Couldn't open this source ───────────────────────────────────────────────────╮
+│! ffprobe couldn't inspect this source.                                       │
+│unable to inspect the source with ffprobe: denied                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
-Details                                                                         
-unable to inspect the source with ffprobe: denied
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+╭ Input ───────────────────────────────────────────────────────────────────────╮
+│R try again  •  E edit URL  •  Q quit                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+R try again  •  E edit URL  •  Q quit

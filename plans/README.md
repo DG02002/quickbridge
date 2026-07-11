@@ -23,7 +23,7 @@ legacy `src/` tree.
 | 006 | Make track selection focused, compact, and keyboard-clear | P1 | M | 001, 005 | DONE |
 | 007 | Replace the running transcript with a responsive live dashboard | P1 | L | 002, 003, 005 | DONE |
 | 008 | Keep recoverable source and player errors inside the TUI | P2 | M | 005, 007 | DONE |
-| 009 | Replace command-shell interaction with native TUI actions | P1 | L | 005, 006, 007, 008 | TODO |
+| 009 | Build a persistent TUI workspace and command composer | P1 | L | 005, 006, 007, 008 | DONE |
 
 Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED (<reason>)`, or
 `REJECTED (<reason>)`.
@@ -48,9 +48,8 @@ Status values: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED (<reason>)`, or
 - Plan 008 follows Plan 007 because recoverable errors need a stable dashboard
   region and composer rather than adding more lines to the current transcript.
 - Plan 009 is the final interaction pass. It preserves scripted CLI mode for
-  automation while replacing `/url`, `status`, `help`, `reopen`, and `quit` as
-  the primary interactive vocabulary with fields, shortcuts, overlays, and
-  explicit focused actions.
+  automation and keeps tracks, player state, telemetry, and a command composer
+  visible in one full-screen workspace.
 
 ## Evidence summary
 

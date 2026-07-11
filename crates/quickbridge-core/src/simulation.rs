@@ -3,6 +3,7 @@
 pub enum SimulationScenario {
     HappyPath,
     NoRanges,
+    UiTour,
 }
 
 impl SimulationScenario {
@@ -10,6 +11,7 @@ impl SimulationScenario {
         match self {
             Self::HappyPath => "happy-path",
             Self::NoRanges => "no-ranges",
+            Self::UiTour => "ui-tour",
         }
     }
 }

@@ -1,29 +1,28 @@
 ---
 source: crates/quickbridge-ui/src/render/mod.rs
-assertion_line: 1152
 expression: contents
 ---
-quickbridge 0.1.0                                                               
-● Ready • Live session                                                          
-Session 1 • Live                                                                
-Playback health                                                                 
-Player  ! Window closed    Time    00:00:12 / 00:02:00                          
-Buffer  00:00:06    Relay   3.0 MB/s    Storage 12.0 MB                         
-                                                                                
-Attention                                                                       
-[WARN] QuickTime Player window is closed. Type `reopen` to open the stream      
-again.                                                                          
+quickbridge v0.1.0                                                              
                                                                                 
                                                                                 
-Recent activity                                                                 
-· Type a timecode like `01:30`, use `+10` or `-10` to jump, or `help` for       
-commands.                                                                       
+Source                                                                          
+https://example.com/video.mkv                                                   
+                                                                                
+✓ Found video and audio tracks                                                  
+✓ Started local stream server                                                   
+✓ Started ffmpeg relay                                                          
+✓ Opened QuickTime Player                                                       
+[WARN] QuickTime Player window is closed — type `reopen`.                       
+                                                                                
+Tracks                                                                          
+Video  H.264 • Unknown resolution • SDR • default                               
+Audio  No audio                                                                 
                                                                                 
                                                                                 
-                                                                                
-                                                                                
-Command                                                                         
-                                                                                
-> reopen                                                                        
-                                                                                
-PgUp/PgDn activity • Enter run • Ctrl+C exit
+Player                                                                          
+00:00:12 / 00:02:00                                                             
+Buffer 00:00:06    Relay 3.0 MB/s    Storage 12.0 MB                            
+╭ Input ───────────────────────────────────────────────────────────────────────╮
+│> reopen▏                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Enter run  •  PgUp/PgDn activity  •  Esc clear/close  •  Ctrl+C quit

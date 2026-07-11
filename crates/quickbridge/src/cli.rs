@@ -13,6 +13,7 @@ Environment:
 enum SimulationArg {
     HappyPath,
     NoRanges,
+    UiTour,
 }
 
 impl From<SimulationArg> for SimulationScenario {
@@ -20,6 +21,7 @@ impl From<SimulationArg> for SimulationScenario {
         match value {
             SimulationArg::HappyPath => SimulationScenario::HappyPath,
             SimulationArg::NoRanges => SimulationScenario::NoRanges,
+            SimulationArg::UiTour => SimulationScenario::UiTour,
         }
     }
 }

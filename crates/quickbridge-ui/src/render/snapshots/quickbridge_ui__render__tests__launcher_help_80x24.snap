@@ -1,0 +1,28 @@
+---
+source: crates/quickbridge-ui/src/render/mod.rs
+expression: help
+---
+quickbridge v0.1.0                                                              
+                                                                                
+                                                                                
+Source                                                                          
+Enter a direct media URL below                                                  
+                                                                                
+╭ Session ─────────────────────────────────────────────────────────────────────╮
+│Open media in QuickTime Player                                                │
+│Enter a direct http:// or https:// media URL below.                           │
+│               ╭ Help ─────────────────────────────────────────╮              │
+╰───────────────│Enter a direct http:// or https:// media URL.  │──────────────╯
+                │Enter  Inspect source                          │               
+                │Ctrl+C  Quit                                   │               
+                │Esc or F1  Close                               │               
+                ╰───────────────────────────────────────────────╯               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+╭ Input ───────────────────────────────────────────────────────────────────────╮
+│> ▏https://example.com/movie.mkv                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Enter inspect source  •  F1 help  •  Ctrl+C quit

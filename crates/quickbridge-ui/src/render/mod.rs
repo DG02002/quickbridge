@@ -3,19 +3,29 @@ use super::app::{
     RunningState, Screen, SourceErrorState, TrackSelectionState,
 };
 use crate::text::{format_bytes, format_bytes_per_second, format_playback_time};
-use quickbridge_core::{AudioStream, JumpStep, LaunchStep, PlayerState, PrepareStep, VideoStream};
+use quickbridge_core::{
+    AudioStream, JumpStep, LaunchStep, PlayerState, PrepareStep, VideoStream, help_text,
+};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Block, BorderType, Clear, Paragraph, Wrap},
 };
 
 const ACTIVE_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub(crate) fn render(frame: &mut Frame<'_>, state: &AppState, full_screen: bool) {
     let width = frame.area().width as usize;
+    if full_screen && frame.area().width >= 50 && frame.area().height >= 16 {
+        render_workspace(frame, state);
+        return;
+    }
+    if let Screen::Launcher(launcher) = &state.screen {
+        render_launcher(frame, state, launcher);
+        return;
+    }
     if let Screen::TrackSelection(selection) = &state.screen {
         render_track_selection(frame, state, selection);
         return;
@@ -38,7 +48,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &AppState, full_screen: bool)
     }
 
     let lines = match &state.screen {
-        Screen::Launcher(launcher) => launcher_lines(state, launcher, width),
+        Screen::Launcher(_) => unreachable!("handled above"),
         Screen::Inspecting { progress } => {
             progress_screen_lines("Inspect source", None, progress, prepare_label)
         }
@@ -64,67 +74,287 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &AppState, full_screen: bool)
     );
 }
 
+fn render_workspace(frame: &mut Frame<'_>, state: &AppState) {
+    let area = frame.area();
+    let regions = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(8),
+        Constraint::Length(3),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    let content_width = area.width;
+
+    let version = state
+        .version
+        .strip_prefix("quickbridge ")
+        .unwrap_or(&state.version);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            format!("quickbridge v{version}"),
+            version_style(),
+        )),
+        regions[0],
+    );
+
+    let source = match &state.screen {
+        Screen::Launcher(launcher) if !launcher.input.is_empty() => launcher.input.as_str(),
+        _ if !state.source_url.is_empty() => state.source_url.as_str(),
+        _ => "Enter a direct media URL below",
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled("Source", section_style()),
+            Line::styled(source.to_string(), text_style()),
+        ]),
+        Rect::new(regions[1].x, regions[1].y, content_width, regions[1].height),
+    );
+
+    render_workspace_body(frame, state, regions[2]);
+    render_workspace_input(frame, state, regions[3]);
+    frame.render_widget(
+        Paragraph::new(Line::styled(workspace_footer(state), detail_style())),
+        regions[4],
+    );
+
+    match &state.screen {
+        Screen::Launcher(launcher) if launcher.help_open => render_overlay(
+            frame,
+            " Help ",
+            &[
+                "Enter a direct http:// or https:// media URL.",
+                "Enter  Inspect source",
+                "Ctrl+C  Quit",
+                "Esc or F1  Close",
+            ],
+        ),
+        Screen::Running(running) if running.help_open => {
+            let help = help_text();
+            let mut lines = help.lines().collect::<Vec<_>>();
+            lines.push("");
+            lines.push("Esc  Close");
+            render_overlay(frame, " Help ", &lines);
+        }
+        Screen::Running(running) if running.details.is_some() => {
+            let lines = running
+                .details
+                .as_deref()
+                .unwrap_or_default()
+                .lines()
+                .collect::<Vec<_>>();
+            render_overlay(frame, " Session details ", &lines);
+        }
+        _ => {}
+    }
+}
+
+fn render_workspace_body(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
+    match &state.screen {
+        Screen::Launcher(_) => {
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::styled("Open media in QuickTime Player", label_style()),
+                    Line::styled(
+                        "Enter a direct http:// or https:// media URL below.",
+                        detail_style(),
+                    ),
+                ])
+                .block(rounded_block(" Session ")),
+                top_rect(area, 5),
+            );
+        }
+        Screen::Inspecting { progress } => {
+            let lines = progress_flow_lines(progress, prepare_label);
+            render_activity_card(frame, area, lines, 0);
+        }
+        Screen::TrackSelection(selection) => {
+            let cards_height = track_cards_height(selection, area.height);
+            let gap = u16::from(area.height >= cards_height.saturating_add(4));
+            let regions = Layout::vertical([
+                Constraint::Min(0),
+                Constraint::Length(gap),
+                Constraint::Length(cards_height),
+            ])
+            .split(area);
+            render_activity_card(
+                frame,
+                regions[0],
+                state.prepare_history.iter().map(history_line).collect(),
+                0,
+            );
+            render_track_cards(frame, regions[2], selection);
+        }
+        Screen::Starting {
+            selection_title,
+            progress,
+            prepare_history,
+        } => render_starting_workspace(frame, area, selection_title, prepare_history, progress),
+        Screen::Running(running) => render_running_workspace(frame, area, running),
+        Screen::SourceError(error) => {
+            let lines = vec![
+                Line::styled(format!("! {}", error.summary), warning_style()),
+                Line::styled(error.diagnostic.clone(), detail_style()),
+            ];
+            frame.render_widget(
+                Paragraph::new(lines).block(rounded_block(" Couldn't open this source ")),
+                top_rect(area, 4),
+            );
+        }
+    }
+}
+
+fn render_workspace_input(frame: &mut Frame<'_>, state: &AppState, area: Rect) {
+    let line = match &state.screen {
+        Screen::Launcher(launcher) => launcher_editor_line(launcher, area.width),
+        Screen::Inspecting { .. } => Line::styled("Inspecting source…", detail_style()),
+        Screen::TrackSelection(_) => Line::styled(
+            "Use ↑ or ↓ to select a track, then press Enter",
+            detail_style(),
+        ),
+        Screen::Starting { .. } => Line::styled("Starting QuickTime Player…", detail_style()),
+        Screen::Running(running) => {
+            command_input_line(running, area.width.saturating_sub(2) as usize)
+        }
+        Screen::SourceError(error) if error.editing => Line::from(vec![
+            Span::styled("> ", prompt_prefix_style()),
+            Span::styled(error.input.clone(), prompt_text_style()),
+        ]),
+        Screen::SourceError(_) => {
+            Line::styled("R try again  •  E edit URL  •  Q quit", detail_style())
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(line).block(
+            rounded_block(" Input ").border_style(Style::default().add_modifier(Modifier::BOLD)),
+        ),
+        area,
+    );
+}
+
+fn workspace_footer(state: &AppState) -> &'static str {
+    match &state.screen {
+        Screen::Launcher(_) => "Enter inspect source  •  F1 help  •  Ctrl+C quit",
+        Screen::Inspecting { .. } => "Ctrl+C cancel",
+        Screen::TrackSelection(selection) => track_selection_hint(selection),
+        Screen::Starting { .. } => "Ctrl+C cancel",
+        Screen::Running(_) => {
+            "Enter run  •  PgUp/PgDn activity  •  Esc clear/close  •  Ctrl+C quit"
+        }
+        Screen::SourceError(error) if error.editing => "Enter try again  •  Esc cancel",
+        Screen::SourceError(_) => "R try again  •  E edit URL  •  Q quit",
+    }
+}
+
+fn top_rect(area: Rect, height: u16) -> Rect {
+    Rect::new(area.x, area.y, area.width, area.height.min(height))
+}
+
+fn render_launcher(frame: &mut Frame<'_>, state: &AppState, launcher: &LauncherState) {
+    let area = frame.area();
+    let content = Layout::vertical([Constraint::Length(7), Constraint::Min(0)])
+        .margin(1)
+        .split(area)[0];
+    let message = launcher
+        .history
+        .last()
+        .map(history_line)
+        .unwrap_or_else(|| {
+            Line::styled(
+                "Enter a direct http:// or https:// media URL",
+                detail_style(),
+            )
+        });
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(state.version.clone(), version_style()),
+            Line::styled("Open media in QuickTime Player", detail_style()),
+            Line::raw(""),
+            message,
+            launcher_editor_line(launcher, content.width),
+            Line::raw(""),
+            Line::styled(
+                "Enter inspect source  •  F1 help  •  Ctrl+C quit",
+                detail_style(),
+            ),
+        ]),
+        content,
+    );
+    if launcher.help_open {
+        render_overlay(
+            frame,
+            " Launcher help ",
+            &[
+                "Enter a direct http:// or https:// media URL.",
+                "Enter  Inspect source",
+                "Ctrl+C  Quit",
+                "Esc or F1  Close",
+            ],
+        );
+    }
+}
+
+fn rounded_block(title: &str) -> Block<'_> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(title)
+}
+
+fn launcher_editor_line(launcher: &LauncherState, width: u16) -> Line<'static> {
+    if launcher.input.is_empty() {
+        return Line::from(vec![
+            Span::styled("> ", prompt_prefix_style()),
+            Span::styled("▏https://example.com/movie.mkv", prompt_placeholder_style()),
+        ]);
+    }
+    let caret_position = launcher.input[..launcher.cursor].chars().count();
+    let mut displayed = launcher.input.clone();
+    displayed.insert(launcher.cursor, '▏');
+    let available = usize::from(width.saturating_sub(5)).max(1);
+    let start = caret_position.saturating_sub(available.saturating_sub(1));
+    let visible = displayed
+        .chars()
+        .skip(start)
+        .take(available)
+        .collect::<String>();
+    Line::from(vec![
+        Span::styled(if start > 0 { "< " } else { "> " }, prompt_prefix_style()),
+        Span::styled(visible, prompt_text_style()),
+    ])
+}
+
 fn source_error_lines(
     state: &AppState,
     error: &SourceErrorState,
-    width: usize,
+    _width: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::styled(state.version.clone(), version_style()),
         Line::raw(""),
-        section_title("Couldn't prepare source"),
+        section_title("Unable to open source"),
         Line::styled(format!("! {}", error.summary), warning_style()),
-        Line::raw(""),
-        Line::styled("Source", label_style()),
-        Line::styled(error.attempted_url.clone(), text_style()),
-        Line::raw(""),
+        Line::styled(error.attempted_url.clone(), detail_style()),
     ];
     if error.editing {
-        lines.push(section_title("Edit URL"));
-        lines.extend(input_lines(
-            &error.input,
-            "https://example.com/video.mkv",
-            "Enter retry edited URL • Esc cancel",
-            width,
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("Edit URL", label_style()));
+        lines.push(Line::from(vec![
+            Span::styled("> ", prompt_prefix_style()),
+            Span::styled(error.input.clone(), prompt_text_style()),
+        ]));
+        lines.push(Line::styled(
+            "Enter try again  •  Esc cancel",
+            detail_style(),
         ));
     } else {
-        lines.push(section_title("Choose an action"));
-        lines.push(Line::styled(
-            "R Retry • E Edit URL • Q Quit",
-            accent_style(),
-        ));
         lines.push(Line::raw(""));
-        lines.push(Line::styled("Details", label_style()));
         lines.push(Line::styled(error.diagnostic.clone(), detail_style()));
-    }
-    lines
-}
-
-fn launcher_lines(state: &AppState, launcher: &LauncherState, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::styled(state.version.clone(), version_style()),
-        Line::raw(""),
-        section_title("quickbridge"),
-        Line::styled(
-            "Paste a media URL or run `/url https://example.com/video.mkv`.",
-            text_style(),
-        ),
-        Line::styled(
-            "The session history stays in the terminal buffer.",
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "R try again  •  E edit URL  •  Q quit",
             detail_style(),
-        ),
-        Line::raw(""),
-        section_title("Session"),
-    ];
-    lines.extend(history_lines(&launcher.history));
-    lines.push(Line::raw(""));
-    lines.push(section_title("Input"));
-    lines.extend(input_lines(
-        &launcher.input,
-        "/url https://example.com/video.mkv",
-        "Enter submit  •  Ctrl+C exit",
-        width,
-    ));
+        ));
+    }
     lines
 }
 
@@ -201,67 +431,139 @@ fn render_track_selection(
     let regions = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(1),
             Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(1),
         ])
         .split(area);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(state.version.clone(), version_style()),
-            Line::raw(""),
-            section_title("Select tracks"),
+            Line::from(vec![
+                Span::styled("quickbridge", section_style()),
+                Span::styled("  •  Select tracks", detail_style()),
+            ]),
+            Line::styled("Choose video, then audio.", detail_style()),
         ]),
         regions[0],
     );
 
-    let (lines, focused_line) = track_selection_choice_lines(selection, area.width as usize);
-    let viewport_height = usize::from(regions[1].height);
-    let scroll = focused_line.saturating_sub(viewport_height.saturating_sub(1));
-    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), regions[1]);
+    render_track_cards(frame, regions[1], selection);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::raw(""),
-            Line::styled(
-                "↑↓ choose • Tab switch section • Enter play",
-                detail_style(),
-            ),
-        ]),
+        Paragraph::new(Line::styled(
+            track_selection_hint(selection),
+            detail_style(),
+        )),
         regions[2],
     );
+
+    let _ = state;
 }
 
-fn track_selection_choice_lines(
+fn render_track_cards(frame: &mut Frame<'_>, area: Rect, selection: &TrackSelectionState) -> u16 {
+    let cards = area;
+    if selection.request.videos().len() > 1 {
+        let video_height = (selection.request.videos().len() as u16)
+            .saturating_add(1)
+            .min(cards.height.saturating_sub(4))
+            .max(3);
+        let audio_height = (selection.request.audios().len().max(1) as u16)
+            .saturating_add(1)
+            .min(cards.height.saturating_sub(video_height).saturating_sub(1))
+            .max(3);
+        let card_regions = Layout::vertical([
+            Constraint::Length(video_height),
+            Constraint::Length(1),
+            Constraint::Length(audio_height),
+            Constraint::Min(0),
+        ])
+        .split(cards);
+        let (video_lines, video_focus) = video_choice_lines(selection);
+        render_track_card(
+            frame,
+            card_regions[0],
+            "Video",
+            selection.focus == super::app::SelectionFocus::Video,
+            video_lines,
+            video_focus,
+        );
+        let (audio_lines, audio_focus) = audio_choice_lines(selection, cards.width as usize);
+        render_track_card(
+            frame,
+            card_regions[2],
+            "Audio",
+            selection.focus == super::app::SelectionFocus::Audio,
+            audio_lines,
+            audio_focus,
+        );
+        video_height.saturating_add(1).saturating_add(audio_height)
+    } else {
+        let (audio_lines, audio_focus) = audio_choice_lines(selection, cards.width as usize);
+        let audio_area = Rect::new(
+            cards.x,
+            cards.y,
+            cards.width,
+            (selection.request.audios().len().max(1) as u16)
+                .saturating_add(1)
+                .min(cards.height),
+        );
+        render_track_card(frame, audio_area, "Audio", true, audio_lines, audio_focus);
+        audio_area.height
+    }
+}
+
+fn track_cards_height(selection: &TrackSelectionState, available: u16) -> u16 {
+    if selection.request.videos().len() <= 1 {
+        return (selection.request.audios().len().max(1) as u16)
+            .saturating_add(1)
+            .min(available);
+    }
+
+    let video = (selection.request.videos().len() as u16)
+        .saturating_add(1)
+        .min(available.saturating_sub(4))
+        .max(3);
+    let audio = (selection.request.audios().len().max(1) as u16)
+        .saturating_add(1)
+        .min(available.saturating_sub(video).saturating_sub(1))
+        .max(3);
+    video.saturating_add(1).saturating_add(audio).min(available)
+}
+
+fn track_selection_hint(selection: &TrackSelectionState) -> &'static str {
+    match selection.focus {
+        super::app::SelectionFocus::Video if !selection.request.audios().is_empty() => {
+            "↑↓ choose  •  Enter audio"
+        }
+        _ => "↑↓ choose  •  Enter play  •  Tab switch",
+    }
+}
+
+fn video_choice_lines(selection: &TrackSelectionState) -> (Vec<Line<'static>>, usize) {
+    let mut lines = Vec::new();
+    let mut focused_line = 0;
+    for (index, stream) in selection.request.videos().iter().enumerate() {
+        let active =
+            selection.focus == super::app::SelectionFocus::Video && index == selection.video_index;
+        if active {
+            focused_line = lines.len();
+        }
+        lines.push(selectable_line(
+            active,
+            index == selection.video_index,
+            compact_video_label(stream),
+        ));
+    }
+    (lines, focused_line)
+}
+
+fn audio_choice_lines(
     selection: &TrackSelectionState,
     width: usize,
 ) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::new();
-    let mut focused_line = 0;
-    if selection.request.videos().len() > 1 {
-        lines.push(focus_heading(
-            "Video",
-            selection.focus == super::app::SelectionFocus::Video,
-        ));
-        for (index, stream) in selection.request.videos().iter().enumerate() {
-            let active = selection.focus == super::app::SelectionFocus::Video
-                && index == selection.video_index;
-            if active {
-                focused_line = lines.len();
-            }
-            lines.push(selectable_line(
-                active,
-                index == selection.video_index,
-                compact_video_label(stream),
-            ));
-        }
-        lines.push(Line::raw(""));
-    }
-    lines.push(focus_heading(
-        "Audio",
-        selection.focus == super::app::SelectionFocus::Audio,
-    ));
+    let mut focused_line = selection.audio_index.unwrap_or_default();
     if selection.request.audios().is_empty() {
-        lines.push(Line::styled("  No audio track available", detail_style()));
+        lines.push(Line::styled("No audio track available", detail_style()));
     } else {
         for (index, stream) in selection.request.audios().iter().enumerate() {
             let active = selection.focus == super::app::SelectionFocus::Audio
@@ -272,17 +574,147 @@ fn track_selection_choice_lines(
             lines.push(selectable_line(
                 active,
                 selection.audio_index == Some(index),
-                compact_audio_label(stream, width.saturating_sub(2)),
+                compact_audio_label(stream, width.saturating_sub(4)),
             ));
         }
     }
     (lines, focused_line)
 }
 
+fn render_track_card(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    focused: bool,
+    lines: Vec<Line<'static>>,
+    focused_line: usize,
+) {
+    let viewport_height = usize::from(area.height.saturating_sub(1)).max(1);
+    let scroll = focused_line.saturating_sub(viewport_height.saturating_sub(1));
+    let regions = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            title.to_string(),
+            if focused {
+                label_style()
+            } else {
+                section_style()
+            },
+        )),
+        regions[0],
+    );
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), regions[1]);
+}
+
+fn render_starting_workspace(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    selection_title: &str,
+    prepare_history: &[HistoryEntry],
+    progress: &ProgressModel<LaunchStep>,
+) {
+    let selection_lines = selection_title
+        .lines()
+        .skip(1)
+        .map(|line| Line::styled(line.to_string(), text_style()))
+        .collect::<Vec<_>>();
+    let selection_height = (selection_lines.len() as u16)
+        .saturating_add(2)
+        .clamp(3, area.height);
+    let gap = u16::from(area.height >= selection_height.saturating_add(4));
+    let regions = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(gap),
+        Constraint::Length(selection_height),
+    ])
+    .split(area);
+    let mut activity = prepare_history.iter().map(history_line).collect::<Vec<_>>();
+    activity.extend(progress_flow_lines(progress, launch_label));
+    render_activity_card(frame, regions[0], activity, 0);
+    frame.render_widget(
+        Paragraph::new(section_lines("Tracks", selection_lines)),
+        regions[2],
+    );
+}
+
+fn render_running_workspace(frame: &mut Frame<'_>, area: Rect, running: &RunningState) {
+    let player_lines = player_card_lines(running, area.width.saturating_sub(2) as usize);
+    let player_height = (player_lines.len() as u16).saturating_add(1);
+    let gap = u16::from(area.height >= player_height.saturating_add(4).saturating_add(5));
+    let regions = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(gap),
+        Constraint::Length(4),
+        Constraint::Length(gap),
+        Constraint::Length(player_height),
+    ])
+    .split(area);
+    let mut activity = running
+        .prepare_history
+        .iter()
+        .chain(&running.startup_history)
+        .chain(&running.history)
+        .map(history_line)
+        .collect::<Vec<_>>();
+    if let Some(progress) = &running.jump_progress {
+        activity.extend(progress_flow_lines(progress, jump_label));
+    }
+    if let Some(warning) = live_warning_line(running) {
+        activity.push(Line::styled(warning, warning_style()));
+    }
+    render_activity_card(frame, regions[0], activity, running.activity_scroll);
+    frame.render_widget(
+        Paragraph::new(section_lines(
+            "Tracks",
+            selected_track_lines(running, area.width as usize),
+        )),
+        regions[2],
+    );
+    frame.render_widget(
+        Paragraph::new(section_lines("Player", player_lines)),
+        regions[4],
+    );
+}
+
+fn render_activity_card(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    mut lines: Vec<Line<'static>>,
+    scroll_from_bottom: usize,
+) {
+    if area.height < 3 || area.width < 4 {
+        return;
+    }
+    if lines.is_empty() {
+        lines.push(Line::styled("No activity yet.", detail_style()));
+    }
+    let viewport_height = usize::from(area.height.saturating_sub(1)).max(1);
+    let max_scroll = lines.len().saturating_sub(viewport_height);
+    let scroll = max_scroll.saturating_sub(scroll_from_bottom.min(max_scroll));
+    frame.render_widget(
+        Paragraph::new(section_lines("Activity", lines))
+            .scroll((scroll as u16, 0))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn section_lines(title: &'static str, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let mut section = Vec::with_capacity(lines.len() + 1);
+    section.push(Line::styled(title, section_style()));
+    section.extend(lines);
+    section
+}
+
 fn running_lines(state: &AppState, running: &RunningState, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::styled(state.version.clone(), version_style())];
-    lines.push(Line::raw(""));
-    lines.push(section_title("Live session"));
+    let mut lines = vec![Line::from(vec![
+        Span::styled("quickbridge", section_style()),
+        Span::styled(
+            format!("  {}", running.playback_mode.label()),
+            detail_style(),
+        ),
+    ])];
+    lines.extend(selected_track_lines(running, width));
     lines.extend(health_lines(running, width));
 
     if let Some(warning) = live_warning_line(running) {
@@ -295,114 +727,161 @@ fn running_lines(state: &AppState, running: &RunningState, width: usize) -> Vec<
     }
 
     lines.push(Line::raw(""));
-    lines.push(section_title("Input"));
-    lines.extend(input_lines(
-        &running.input,
-        "01:30, +10, status, help, quit",
-        "",
-        width,
-    ));
+    lines.push(command_input_line(running, width));
+    lines.extend(running_controls(running));
+    let _ = state;
     lines
 }
 
 fn render_running_dashboard(frame: &mut Frame<'_>, state: &AppState, running: &RunningState) {
     let area = frame.area();
-    if area.width < 50 || area.height < 16 {
-        frame.render_widget(
-            Paragraph::new(running_lines(state, running, area.width as usize))
-                .wrap(Wrap { trim: false }),
-            area,
-        );
-        return;
+    frame.render_widget(
+        Paragraph::new(running_lines(state, running, area.width as usize))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn running_controls(running: &RunningState) -> Vec<Line<'static>> {
+    let _ = running;
+    vec![Line::styled(
+        "Enter run  •  Esc clear/close  •  Ctrl+C quit",
+        detail_style(),
+    )]
+}
+
+fn selected_track_lines(running: &RunningState, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Video  ", label_style()),
+        Span::styled(
+            truncate_label(
+                &compact_video_label(running.selection.selected_video()),
+                width.saturating_sub(7),
+            ),
+            text_style(),
+        ),
+    ])];
+    lines.push(Line::from(vec![
+        Span::styled("Audio  ", label_style()),
+        Span::styled(
+            running
+                .selection
+                .selected_audio()
+                .map(|audio| compact_audio_label(audio, width.saturating_sub(7)))
+                .unwrap_or_else(|| "No audio".to_string()),
+            text_style(),
+        ),
+    ]));
+    lines
+}
+
+fn command_input_line(running: &RunningState, width: usize) -> Line<'static> {
+    if running.input.is_empty() {
+        return Line::from(vec![
+            Span::styled("> ", prompt_prefix_style()),
+            Span::styled(
+                "Enter a time or command. Type help for options",
+                prompt_placeholder_style(),
+            ),
+        ]);
     }
 
-    let wide = area.width >= 80;
-    let alert_height = if running.jump_progress.is_some() || live_warning_line(running).is_some() {
-        if wide { 5 } else { 3 }
-    } else {
-        2
-    };
-    let regions = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(if wide { 3 } else { 2 }),
-            Constraint::Length(if wide { 4 } else { 6 }),
-            Constraint::Length(alert_height),
-            Constraint::Min(2),
-            Constraint::Length(5),
-        ])
-        .split(area);
+    let caret_position = running.input[..running.input_cursor].chars().count();
+    let mut displayed = running.input.clone();
+    displayed.insert(running.input_cursor, '▏');
+    let available = width.saturating_sub(2).max(1);
+    let start = caret_position.saturating_sub(available.saturating_sub(1));
+    let visible = displayed
+        .chars()
+        .skip(start)
+        .take(available)
+        .collect::<String>();
+    Line::from(vec![
+        Span::styled(if start > 0 { "< " } else { "> " }, prompt_prefix_style()),
+        Span::styled(visible, prompt_text_style()),
+    ])
+}
 
-    let mut header = vec![
-        Line::styled(state.version.clone(), version_style()),
-        Line::styled("● Ready • Live session", success_style()),
-    ];
-    if wide {
-        header.push(Line::styled(
+fn player_card_lines(running: &RunningState, width: usize) -> Vec<Line<'static>> {
+    let time = format_playback_time(
+        running.snapshot.current_time(),
+        running.media_info.duration(),
+    );
+    let mut lines = vec![Line::styled(time, text_style())];
+    let telemetry = running.snapshot.telemetry();
+    if width >= 50 {
+        lines.push(Line::styled(
             format!(
-                "Session {} • {}",
-                running.snapshot.session_id(),
-                running.playback_mode.label()
+                "Buffer {}    Relay {}    Storage {}",
+                telemetry.buffer_ahead(),
+                format_bytes_per_second(telemetry.relay_write_bytes_per_second()),
+                format_bytes(telemetry.storage_bytes())
+            ),
+            detail_style(),
+        ));
+    } else {
+        lines.push(Line::styled(
+            format!("Buffer {}", telemetry.buffer_ahead()),
+            detail_style(),
+        ));
+        lines.push(Line::styled(
+            format!(
+                "Relay {}    Storage {}",
+                format_bytes_per_second(telemetry.relay_write_bytes_per_second()),
+                format_bytes(telemetry.storage_bytes())
             ),
             detail_style(),
         ));
     }
-    frame.render_widget(Paragraph::new(header), regions[0]);
+    lines
+}
+
+fn render_overlay(frame: &mut Frame<'_>, title: &str, lines: &[&str]) {
+    let area = frame.area();
+    let content_width = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or_default() as u16;
+    let width = content_width
+        .saturating_add(4)
+        .max(36)
+        .min(area.width.saturating_sub(4));
+    let height = (lines.len() as u16)
+        .saturating_add(2)
+        .min(area.height.saturating_sub(4));
+    let popup = centered_rect(area, width, height);
+    frame.render_widget(Clear, popup);
     frame.render_widget(
-        Paragraph::new(health_lines(running, area.width as usize)),
-        regions[1],
+        Paragraph::new(
+            lines
+                .iter()
+                .map(|line| Line::styled((*line).to_string(), text_style()))
+                .collect::<Vec<_>>(),
+        )
+        .block(rounded_block(title))
+        .wrap(Wrap { trim: true }),
+        popup,
     );
+}
 
-    let alert = if let Some(progress) = &running.jump_progress {
-        let mut lines = vec![section_title("Current action")];
-        lines.extend(progress_flow_lines(progress, jump_label));
-        lines
-    } else if let Some(warning) = live_warning_line(running) {
-        vec![
-            section_title("Attention"),
-            Line::styled(warning, warning_style()),
-        ]
-    } else {
-        vec![Line::styled("✓ Playback is ready", success_style())]
-    };
-    frame.render_widget(Paragraph::new(alert).wrap(Wrap { trim: false }), regions[2]);
-
-    let activity = running_activity_lines(running);
-    let activity_height = usize::from(regions[3].height).saturating_sub(1);
-    let max_scroll = activity.len().saturating_sub(activity_height);
-    let scroll = max_scroll.saturating_sub(running.activity_scroll.min(max_scroll));
-    let title = if running.details.is_some() {
-        "Details"
-    } else {
-        "Recent activity"
-    };
-    let mut activity_panel = vec![section_title(title)];
-    activity_panel.extend(activity);
-    frame.render_widget(
-        Paragraph::new(activity_panel)
-            .scroll((scroll as u16, 0))
-            .wrap(Wrap { trim: false }),
-        regions[3],
-    );
-
-    let mut composer = vec![section_title("Command")];
-    composer.extend(input_lines(
-        &running.input,
-        "01:30, +10, status, help, quit",
-        "PgUp/PgDn activity • Enter run • Ctrl+C exit",
-        area.width as usize,
-    ));
-    frame.render_widget(Paragraph::new(composer), regions[4]);
+fn centered_rect(area: ratatui::layout::Rect, width: u16, height: u16) -> ratatui::layout::Rect {
+    let vertical = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(height),
+        Constraint::Fill(1),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(width),
+        Constraint::Fill(1),
+    ])
+    .split(vertical[1])[1]
 }
 
 fn health_lines(running: &RunningState, width: usize) -> Vec<Line<'static>> {
-    let (symbol, player) = match running.snapshot.player_state() {
-        PlayerState::Playing => ("▶", "Playing"),
-        PlayerState::Paused => ("Ⅱ", "Paused"),
-        PlayerState::WindowClosed => ("!", "Window closed"),
-        PlayerState::AppClosed => ("!", "App closed"),
-        PlayerState::Unavailable => ("?", "Unavailable"),
-    };
+    let (symbol, player) = player_state_label(running.snapshot.player_state());
     let fields = [
         format!("Player  {symbol} {player}"),
         format!(
@@ -424,29 +903,25 @@ fn health_lines(running: &RunningState, width: usize) -> Vec<Line<'static>> {
     ];
     if width >= 80 {
         vec![
-            section_title("Playback health"),
             Line::styled(fields[..2].join("    "), text_style()),
             Line::styled(fields[2..].join("    "), text_style()),
         ]
     } else {
-        std::iter::once(section_title("Playback health"))
-            .chain(
-                fields
-                    .into_iter()
-                    .map(|field| Line::styled(field, text_style())),
-            )
+        fields
+            .into_iter()
+            .map(|field| Line::styled(field, text_style()))
             .collect()
     }
 }
 
-fn running_activity_lines(running: &RunningState) -> Vec<Line<'static>> {
-    if let Some(details) = &running.details {
-        return details
-            .lines()
-            .map(|line| Line::styled(line.to_string(), text_style()))
-            .collect();
+fn player_state_label(state: PlayerState) -> (&'static str, &'static str) {
+    match state {
+        PlayerState::Playing => ("▶", "Playing"),
+        PlayerState::Paused => ("Ⅱ", "Paused"),
+        PlayerState::WindowClosed => ("!", "Window closed"),
+        PlayerState::AppClosed => ("!", "App closed"),
+        PlayerState::Unavailable => ("?", "Unavailable"),
     }
-    history_lines(&running.history)
 }
 
 fn progress_flow_lines<Step>(
@@ -479,30 +954,6 @@ fn history_lines(history: &[HistoryEntry]) -> Vec<Line<'static>> {
     history.iter().map(history_line).collect()
 }
 
-fn input_lines(input: &str, placeholder: &str, footer: &str, width: usize) -> Vec<Line<'static>> {
-    let width = width.max(1);
-    let content = if input.is_empty() { placeholder } else { input };
-    let content_style = if input.is_empty() {
-        prompt_placeholder_style()
-    } else {
-        prompt_text_style()
-    };
-    let padding = width.saturating_sub(2 + content.chars().count());
-    let mut lines = vec![
-        Line::styled(" ".repeat(width), prompt_background_style()),
-        Line::from(vec![
-            Span::styled("> ", prompt_prefix_style()),
-            Span::styled(content.to_string(), content_style),
-            Span::styled(" ".repeat(padding), prompt_background_style()),
-        ]),
-        Line::styled(" ".repeat(width), prompt_background_style()),
-    ];
-    if !footer.is_empty() {
-        lines.push(Line::styled(footer.to_string(), detail_style()));
-    }
-    lines
-}
-
 fn bottom_scroll_offset(lines: &[Line<'static>], width: usize, viewport_height: usize) -> usize {
     if viewport_height == 0 {
         return 0;
@@ -527,14 +978,6 @@ fn visual_line_height(line: &Line<'static>, width: usize) -> usize {
         .sum::<usize>();
 
     content_width.max(1).div_ceil(width)
-}
-
-fn focus_heading(label: &str, focused: bool) -> Line<'static> {
-    if focused {
-        Line::styled(format!("▸ {label}"), accent_style())
-    } else {
-        Line::styled(format!("  {label}"), label_style())
-    }
 }
 
 fn selectable_line(active: bool, selected: bool, text: String) -> Line<'static> {
@@ -736,10 +1179,10 @@ fn live_warning_line(running: &RunningState) -> Option<String> {
     }
     match running.snapshot.player_state() {
         PlayerState::WindowClosed => Some(String::from(
-            "[WARN] QuickTime Player window is closed. Type `reopen` to open the stream again.",
+            "[WARN] QuickTime Player window is closed — type `reopen`.",
         )),
         PlayerState::AppClosed => Some(String::from(
-            "[WARN] QuickTime Player is closed. Type `reopen` to open the stream again.",
+            "[WARN] QuickTime Player is closed — type `reopen`.",
         )),
         PlayerState::Unavailable => Some(String::from(
             "[WARN] QuickTime Player status isn't available right now.",
@@ -749,76 +1192,60 @@ fn live_warning_line(running: &RunningState) -> Option<String> {
 }
 
 fn version_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(170, 184, 204))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
 fn section_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(103, 168, 222))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 fn label_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(214, 223, 237))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
 fn text_style() -> Style {
-    Style::default().fg(Color::Rgb(214, 223, 237))
+    Style::default()
 }
 
 fn detail_style() -> Style {
-    Style::default().fg(Color::Rgb(122, 139, 164))
+    Style::default().add_modifier(Modifier::DIM)
 }
 
 fn accent_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(112, 198, 255))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
 }
 
 fn selected_line_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(144, 214, 255))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
 }
 
 fn success_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(127, 211, 150))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
 fn warning_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(255, 196, 107))
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 fn prompt_background_style() -> Style {
-    Style::default().bg(Color::Rgb(28, 38, 55))
+    Style::default()
 }
 
 fn prompt_prefix_style() -> Style {
-    prompt_background_style()
-        .fg(Color::Rgb(112, 198, 255))
-        .add_modifier(Modifier::BOLD)
+    prompt_background_style().add_modifier(Modifier::BOLD)
 }
 
 fn prompt_text_style() -> Style {
-    prompt_background_style().fg(Color::Rgb(226, 233, 244))
+    prompt_background_style()
 }
 
 fn prompt_placeholder_style() -> Style {
-    prompt_background_style().fg(Color::Rgb(127, 144, 168))
+    prompt_background_style().add_modifier(Modifier::DIM)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{prompt_prefix_style, render};
     use crate::{
         app::{
             AppState, HistoryEntry, HistoryTone, LauncherState, ProgressModel, RunningState,
@@ -832,7 +1259,7 @@ mod tests {
         PrepareStep, SeekSupport, SimulationScenario, SourceInspection, SourceMetadata,
         StreamSelection, StreamTelemetry, Timecode, VideoStream,
     };
-    use ratatui::Terminal;
+    use ratatui::{Terminal, style::Modifier};
 
     fn render_contents(state: &AppState) -> String {
         render_contents_with_size(state, 120, 40)
@@ -855,7 +1282,7 @@ mod tests {
         progress.finish(PrepareStep::SourceUrl);
 
         let contents = render_contents(&state);
-        assert!(contents.contains("Inspect source"));
+        assert!(contents.contains("Inspecting source"));
         assert!(contents.contains("✓ Checked source URL"));
         assert!(contents.contains("Checking whether time jumps are available"));
         assert_snapshot!("inspection_screen_120x40", contents);
@@ -863,25 +1290,32 @@ mod tests {
 
     #[test]
     fn launcher_screen_renders_clean_entrypoint() {
-        let state = AppState {
+        let mut state = AppState {
             version: String::from("quickbridge 0.1.0"),
             source_url: String::new(),
             prepare_history: Vec::new(),
             screen: Screen::Launcher(LauncherState {
                 input: String::new(),
-                history: vec![HistoryEntry {
-                    prefix: String::from("·"),
-                    text: String::from(
-                        "Paste a media URL or run `/url https://example.com/video.mkv` to start.",
-                    ),
-                    tone: HistoryTone::Info,
-                }],
+                cursor: 0,
+                help_open: false,
+                history: Vec::new(),
             }),
         };
 
         let contents = render_contents(&state);
-        assert!(contents.contains("/url https://example.com/video.mkv"));
-        assert!(contents.contains("Input"));
+        assert!(contents.contains("Enter a direct http:// or https:// media URL"));
+        assert!(contents.contains("> ▏https://example.com/movie.mkv"));
+        assert!(contents.contains("Enter inspect source"));
+        assert_snapshot!("launcher_screen_120x40", contents);
+
+        let Screen::Launcher(launcher) = &mut state.screen else {
+            unreachable!();
+        };
+        launcher.help_open = true;
+        let help = render_contents_with_size(&state, 80, 24);
+        assert!(help.contains("Help"));
+        assert!(help.contains("Esc or F1  Close"));
+        assert_snapshot!("launcher_help_80x24", help);
     }
 
     #[test]
@@ -901,9 +1335,9 @@ mod tests {
 
         for (width, height) in [(80, 24), (60, 18)] {
             let contents = render_contents_with_size(&state, width, height);
-            assert!(contents.contains("Couldn't prepare source"));
+            assert!(contents.contains("Couldn't open this source"));
             assert!(contents.contains("ffprobe couldn't inspect this source"));
-            assert!(contents.contains("R Retry • E Edit URL • Q Quit"));
+            assert!(contents.contains("R try again  •  E edit URL  •  Q quit"));
             assert!(contents.contains("https://example.com/broken.mkv"));
             assert_snapshot!(format!("source_error_screen_{width}x{height}"), contents);
         }
@@ -949,11 +1383,11 @@ mod tests {
         };
 
         let contents = render_contents_with_size(&state, 80, 24);
-        assert!(contents.contains("Select tracks"));
+        assert!(contents.contains("quickbridge v0.1.0"));
         assert!(contents.contains("› H.264 • Unknown resolution • SDR"));
         assert_eq!(contents.matches('›').count(), 1);
         assert!(contents.contains("✓ Unknown language • AAC • default"));
-        assert!(contents.contains("↑↓ choose • Tab switch section • Enter play"));
+        assert!(contents.contains("↑↓ choose  •  Enter audio"));
         assert_snapshot!("track_selection_screen_80x24", contents);
         assert_snapshot!(
             "track_selection_screen_120x40",
@@ -967,7 +1401,7 @@ mod tests {
         let contents = render_contents_with_size(&state, 60, 18);
         assert_eq!(contents.matches('›').count(), 1);
         assert!(contents.contains("✓ H.264 • Unknown resolution • SDR"));
-        assert!(contents.contains("↑↓ choose • Tab switch section • Enter play"));
+        assert!(contents.contains("↑↓ choose  •  Enter play  •  Tab switch"));
         assert_snapshot!("track_selection_screen_60x18", contents);
     }
 
@@ -1029,7 +1463,7 @@ mod tests {
 
         let contents = render_contents_with_size(&state, 120, 40);
         assert!(contents.contains("› Unknown language • AAC"));
-        assert!(contents.contains("↑↓ choose • Tab switch section • Enter play"));
+        assert!(contents.contains("↑↓ choose  •  Enter play  •  Tab switch"));
         assert_snapshot!("track_selection_long_list_120x40", contents);
 
         let tiny = render_contents_with_size(&state, 20, 6);
@@ -1102,6 +1536,7 @@ mod tests {
             },
         ];
         running.input = String::from("status");
+        running.input_cursor = running.input.len();
         running.history.push(HistoryEntry {
             prefix: String::from(">"),
             text: String::from("status"),
@@ -1126,14 +1561,39 @@ mod tests {
         };
 
         let contents = render_contents(&state);
-        assert!(contents.contains("● Ready • Live session"));
-        assert!(contents.contains("Player  ▶ Playing"));
-        assert!(contents.contains("Relay   3.0 MB/s"));
-        assert!(contents.contains("Buffer  00:00:06"));
+        assert!(contents.contains("quickbridge v0.1.0"));
+        assert!(!contents.contains("Simulation"));
+        assert!(contents.contains("00:00:12 / 00:02:00"));
+        assert!(contents.contains("Relay 3.0 MB/s"));
+        assert!(contents.contains("Buffer 00:00:06"));
         assert!(contents.contains("Storage 12.0 MB"));
+        assert!(!contents.contains("▶ Playing"));
         assert!(contents.contains("Refreshing QuickTime Player"));
-        assert!(contents.contains("Command"));
+        assert!(contents.contains("Activity"));
+        assert!(contents.contains("✓ Checked source URL"));
+        assert!(contents.contains("✓ Started local stream server"));
+        assert!(contents.contains("Input"));
+        assert!(contents.contains("> status"));
+        let row = |marker: &str| {
+            contents
+                .lines()
+                .position(|line| line.contains(marker))
+                .unwrap()
+        };
+        let section_row = |title: &str| {
+            contents
+                .lines()
+                .position(|line| line.trim() == title)
+                .unwrap()
+        };
+        assert!(section_row("Activity") < section_row("Tracks"));
+        assert!(section_row("Tracks") < section_row("Player"));
+        assert!(section_row("Player") < row("╭ Input"));
         assert_snapshot!("running_screen_120x40", contents);
+        assert_snapshot!(
+            "running_screen_131x36",
+            render_contents_with_size(&state, 131, 36)
+        );
 
         let Screen::Running(running) = &mut state.screen else {
             unreachable!();
@@ -1147,8 +1607,29 @@ mod tests {
             StreamTelemetry::new(3 * 1024 * 1024, 12 * 1024 * 1024, Timecode::from_seconds(6)),
         );
         let paused = render_contents_with_size(&state, 80, 24);
-        assert!(paused.contains("Player  Ⅱ Paused"));
-        assert!(paused.contains("Time    00:00:12 / 00:02:00"));
+        assert!(!paused.contains("Ⅱ Paused"));
+        assert!(paused.contains("00:00:12 / 00:02:00"));
+
+        let Screen::Running(running) = &mut state.screen else {
+            unreachable!();
+        };
+        running.help_open = true;
+        let help = render_contents_with_size(&state, 80, 24);
+        assert!(help.contains("HH:MM:SS"));
+        assert!(help.contains("Esc  Close"));
+        assert_snapshot!("running_help_80x24", help);
+
+        let Screen::Running(running) = &mut state.screen else {
+            unreachable!();
+        };
+        running.help_open = false;
+        running.details = Some(String::from(
+            "Source             | https://example.com/video.mkv\nSession ID         | 1\nTracks\n  HEVC HDR10\n  TrueHD → ALAC",
+        ));
+        let details = render_contents_with_size(&state, 120, 40);
+        assert!(details.contains("Session details"));
+        assert!(details.contains("TrueHD → ALAC"));
+        assert_snapshot!("running_details_120x40", details);
     }
 
     #[test]
@@ -1215,6 +1696,7 @@ mod tests {
             },
         ];
         running.input = String::from("reopen");
+        running.input_cursor = running.input.len();
 
         let state = AppState {
             version: String::from("quickbridge 0.1.0"),
@@ -1224,18 +1706,16 @@ mod tests {
         };
 
         let contents = render_contents_with_size(&state, 80, 24);
-        assert!(contents.contains("Command"));
+        assert!(contents.contains("Input"));
         assert!(contents.contains("> reopen"));
-        assert!(contents.contains("Live session"));
-        assert!(contents.contains("Player  ! Window closed"));
-        assert!(contents.contains("Type `reopen`"));
+        assert!(contents.contains("quickbridge"));
+        assert!(!contents.contains("Live"));
+        assert!(contents.contains("type `reopen`"));
         assert_snapshot!("running_screen_closed_80x24", contents);
 
         let compact = render_contents_with_size(&state, 60, 18);
-        assert!(compact.contains("Player  ! Window closed"));
-        assert!(compact.contains("Time"));
-        assert!(compact.contains("Command"));
-        assert!(compact.contains("Type `reopen`"));
+        assert!(compact.contains("00:00:12 / 00:02:00"));
+        assert!(compact.contains("> reopen"));
         assert_snapshot!("running_screen_closed_60x18", compact);
     }
 
@@ -1256,7 +1736,9 @@ mod tests {
             source_url: String::from("https://example.com/video.mkv"),
             prepare_history: Vec::new(),
             screen: Screen::Starting {
-                selection_title: String::from("video.mkv"),
+                selection_title: String::from(
+                    "video.mkv\nHEVC • 3840×2160 • HDR10\nEnglish • E-AC-3 • 5.1",
+                ),
                 progress,
                 prepare_history: vec![
                     HistoryEntry {
@@ -1274,8 +1756,56 @@ mod tests {
         };
 
         let contents = render_contents(&state);
-        assert_eq!(contents.matches("Start session").count(), 1);
+        assert!(contents.contains("quickbridge v0.1.0"));
+        assert!(contents.contains("HEVC • 3840×2160 • HDR10"));
         assert!(contents.contains("✓ Started local stream server"));
         assert!(contents.contains("Starting ffmpeg relay"));
+        assert_snapshot!("startup_screen_120x40", contents);
+    }
+
+    #[test]
+    fn full_screen_workspace_keeps_shell_regions_fixed_across_phases() {
+        let launcher = render_contents_with_size(&AppState::new(None), 80, 24);
+        let inspecting = render_contents_with_size(
+            &AppState::new(Some(String::from("https://example.com/video.mkv"))),
+            80,
+            24,
+        );
+        let row = |contents: &str, marker: &str| {
+            contents
+                .lines()
+                .position(|line| line.contains(marker))
+                .expect("workspace region should be visible")
+        };
+
+        assert_eq!(row(&launcher, "Source"), row(&inspecting, "Source"));
+        assert_eq!(row(&launcher, "╭ Input"), row(&inspecting, "╭ Input"));
+        assert_eq!(
+            launcher
+                .lines()
+                .find(|line| line.contains("Source"))
+                .unwrap()
+                .chars()
+                .count(),
+            80
+        );
+        assert_eq!(
+            launcher
+                .lines()
+                .find(|line| line.contains("╭ Input"))
+                .unwrap()
+                .chars()
+                .count(),
+            80
+        );
+    }
+
+    #[test]
+    fn prompt_prefix_does_not_reverse_the_background() {
+        assert!(
+            !prompt_prefix_style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 }

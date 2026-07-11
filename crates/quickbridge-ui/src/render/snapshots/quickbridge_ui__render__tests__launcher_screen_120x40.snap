@@ -6,13 +6,13 @@ quickbridge v0.1.0
                                                                                                                         
                                                                                                                         
 Source                                                                                                                  
-https://example.com/video.mkv                                                                                           
+Enter a direct media URL below                                                                                          
                                                                                                                         
-Activity                                                                                                                
-✓ Checked source URL                                                                                                    
-⠋ Checking whether time jumps are available                                                                             
-○ Read source details                                                                                                   
-○ Found video and audio tracks                                                                                          
+╭ Session ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Open media in QuickTime Player                                                                                        │
+│Enter a direct http:// or https:// media URL below.                                                                   │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -39,6 +39,6 @@ Activity
                                                                                                                         
                                                                                                                         
 ╭ Input ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│Inspecting source…                                                                                                    │
+│> ▏https://example.com/movie.mkv                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-Ctrl+C cancel
+Enter inspect source  •  F1 help  •  Ctrl+C quit

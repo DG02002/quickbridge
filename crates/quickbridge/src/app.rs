@@ -36,9 +36,16 @@ pub async fn run(cli: Cli) -> Result<RunOutcome> {
 
     if cli.script.is_empty() {
         require_interactive_terminal()?;
+        let interactive_url = cli.url.clone().or_else(|| {
+            matches!(
+                cli.simulation(),
+                Some(quickbridge_core::SimulationScenario::UiTour)
+            )
+            .then(|| String::from("https://example.com/demo.mkv"))
+        });
         return quickbridge_ui::run(
             InteractiveOptions {
-                url: cli.url.clone(),
+                url: interactive_url,
                 port: cli.port,
                 at: cli.at,
                 verbose: cli.verbose,

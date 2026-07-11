@@ -621,8 +621,16 @@ impl StreamSelection {
         self.video.stream_index
     }
 
+    pub fn selected_video(&self) -> &VideoStream {
+        &self.video
+    }
+
     pub fn audio_stream_index(&self) -> Option<usize> {
         self.audio.as_ref().map(|stream| stream.stream_index)
+    }
+
+    pub fn selected_audio(&self) -> Option<&AudioStream> {
+        self.audio.as_ref()
     }
 
     pub fn audio_handling(&self) -> Option<&AudioHandling> {

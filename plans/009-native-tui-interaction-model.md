@@ -17,6 +17,19 @@
 - **Category**: ux/direction
 - **Planned at**: commit `112ebb1` plus dirty worktree, 2026-07-11
 
+## Post-plan product direction
+
+Manual review of the completed TUI changed the final interaction model. The
+live screen now keeps selected tracks, a compact player, telemetry, and a
+persistent command composer in one workspace. The composer accepts timestamps
+and `help`, `status`, `details`, `reopen`, and `quit`. Conflicting bare-letter
+shortcuts were removed so normal typing is predictable. This product decision
+supersedes the native-actions-only requirements below while preserving the
+typed state model, overlays, and scripted CLI compatibility delivered by the
+plan. Inspection, startup, notices, and command results accumulate in a
+bottom-anchored Activity region that takes the remaining terminal height and
+can be reviewed with PgUp/PgDn or the mouse wheel.
+
 ## Why this matters
 
 QuickBridge's interactive mode currently looks like a TUI but behaves mainly

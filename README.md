@@ -37,30 +37,48 @@ quickbridge --at 01:23:45 --port 50505 "https://example.com/video.mkv"
 ```
 
 Running `quickbridge` without a positional URL opens the TUI launcher. From
-there you can paste a media URL directly or enter `/url https://…` to start a
-session.
+there you can paste a media URL and press Enter to start a session.
 
 When a source has multiple video or audio tracks, `quickbridge` inspects the
 stream layout with `ffprobe` and shows selection menus before playback starts.
 Unsupported audio such as DTS is transcoded to ALAC for QuickTime compatibility.
 
-Interactive commands:
+The live TUI keeps the selected tracks, player timeline, telemetry, and command
+composer in one persistent workspace. The composer accepts absolute timestamps
+(`90`, `01:30`, `01:02:03`), relative jumps (`+30`, `-10`, `+01:30`), and the
+commands `help`, `status`, `details`, `reopen`, and `quit`. Press Enter to run
+the current input, Escape to clear it or close an overlay, and Ctrl+C to quit.
+Completed inspection and startup steps remain in the flexible Activity region;
+use PgUp/PgDn or the mouse wheel to review older or newer entries.
 
-- Absolute timestamps: `90`, `01:30`, `01:02:03`
-- Relative timestamps: `+30`, `-10`, `+01:30`
-- Operational commands: `status`, `help`, `quit`
+The launcher uses a focused URL field: paste or type a direct URL and press
+Enter. F1 opens launcher help.
 
-Launcher commands:
+Scripted automation remains available separately:
 
-- `/url <media-url>`: open a source from inside the TUI
-- Direct URL paste: start immediately
-- `help`, `quit`
+```console
+quickbridge --script status --script quit "https://example.com/video.mkv"
+```
 
-The TUI keeps live relay telemetry above the command composer, including the
-current playback time, download speed, buffer ahead, and temp-session storage
+The TUI keeps live relay telemetry above the contextual controls, including the
+current playback time, relay write rate, buffer ahead, and temp-session storage
 usage. In live mode, quickbridge polls QuickTime Player's front document
 playhead so the displayed source timestamp tracks pauses and other playback
 changes from the player window.
+
+### Manual UI tour
+
+Run the complete interactive flow safely in a terminal or Zellij pane without
+ffmpeg, ffprobe, networking, or QuickTime:
+
+```console
+cargo run -p quickbridge -- --simulate ui-tour
+```
+
+The tour supplies its own demo URL and opens directly into multi-track
+selection, followed by startup and the live dashboard. Try `01:30`, `details`,
+`help`, `reopen`, and `quit`, then resize the Zellij pane to review compact layouts.
+To test the launcher separately, run `--simulate happy-path` without a URL.
 
 ## Environment
 

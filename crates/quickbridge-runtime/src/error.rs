@@ -7,14 +7,14 @@ use thiserror::Error;
 pub enum RuntimeError {
     #[error("interrupted")]
     Interrupted,
-    #[error("invalid source URL `{source_url}`")]
+    #[error("enter a full source URL that starts with http:// or https://: `{source_url}`")]
     InvalidSourceUrl { source_url: String },
     #[error(
-        "unable to use `{binary}`. Install ffmpeg and make sure the executable is available on PATH"
+        "unable to use `{binary}`. Install ffmpeg and add its executable to PATH, then try again"
     )]
     FfmpegUnavailable { binary: String },
     #[error(
-        "unable to use `{binary}`. Install ffprobe and make sure the executable is available on PATH"
+        "unable to use `{binary}`. Install ffprobe and add its executable to PATH, then try again"
     )]
     FfprobeUnavailable { binary: String },
     #[error("unable to execute `{binary}`")]

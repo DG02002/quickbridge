@@ -1,5 +1,5 @@
 use crate::{Result, UiError};
-use crossterm::event::{Event, EventStream, KeyEvent};
+use crossterm::event::{Event, EventStream, KeyEvent, MouseEventKind};
 use futures_util::StreamExt;
 use std::{future::Future, pin::Pin, time::Duration};
 use tokio::signal::ctrl_c;
@@ -12,6 +12,8 @@ pub enum AppEvent {
     Paste(String),
     Resize,
     CtrlC,
+    ScrollUp,
+    ScrollDown,
 }
 
 pub struct AppEventStream {
@@ -55,6 +57,11 @@ impl AppEventStream {
                     Event::Key(key) => Ok(AppEvent::Key(key)),
                     Event::Paste(text) => Ok(AppEvent::Paste(text)),
                     Event::Resize(_, _) => Ok(AppEvent::Resize),
+                    Event::Mouse(mouse) => match mouse.kind {
+                        MouseEventKind::ScrollUp => Ok(AppEvent::ScrollUp),
+                        MouseEventKind::ScrollDown => Ok(AppEvent::ScrollDown),
+                        _ => Ok(AppEvent::Tick),
+                    },
                     _ => Ok(AppEvent::Tick),
                 }
             }

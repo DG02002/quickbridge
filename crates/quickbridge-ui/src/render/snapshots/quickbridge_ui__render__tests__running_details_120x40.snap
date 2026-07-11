@@ -1,6 +1,6 @@
 ---
 source: crates/quickbridge-ui/src/render/mod.rs
-expression: contents
+expression: details
 ---
 quickbridge v0.1.0                                                                                                      
                                                                                                                         
@@ -19,13 +19,13 @@ Activity
 ! [WARN] No ranges                                                                                                      
 > status                                                                                                                
 ○ Preparing the next stream                                                                                             
-○ Waiting for the stream                                                                                                
-⠋ Refreshing QuickTime Player                                                                                           
-○ Cleaning up the last session                                                                                          
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
+○ Waiting for the stream         ╭ Session details ───────────────────────────────────╮                                 
+⠋ Refreshing QuickTime Player    │Source             | https://example.com/video.mkv  │                                 
+○ Cleaning up the last session   │Session ID         | 1                              │                                 
+                                 │Tracks                                              │                                 
+                                 │HEVC HDR10                                          │                                 
+                                 │TrueHD → ALAC                                       │                                 
+                                 ╰────────────────────────────────────────────────────╯                                 
                                                                                                                         
                                                                                                                         
                                                                                                                         

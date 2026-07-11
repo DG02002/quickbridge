@@ -3,7 +3,7 @@ use super::render;
 use crate::{Result, UiError};
 use crossterm::{
     cursor::{Hide, Show},
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -30,9 +30,11 @@ impl TuiRuntime {
             action: "enable raw terminal mode",
             source,
         })?;
-        execute!(stdout, Hide, EnableBracketedPaste).map_err(|source| UiError::Terminal {
-            action: "prepare the terminal for quickbridge",
-            source,
+        execute!(stdout, Hide, EnableBracketedPaste, EnableMouseCapture).map_err(|source| {
+            UiError::Terminal {
+                action: "prepare the terminal for quickbridge",
+                source,
+            }
         })?;
         if options.use_alt_screen {
             execute!(stdout, EnterAlternateScreen).map_err(|source| UiError::Terminal {
@@ -83,10 +85,16 @@ impl Drop for TuiRuntime {
                 self.terminal.backend_mut(),
                 Show,
                 DisableBracketedPaste,
+                DisableMouseCapture,
                 LeaveAlternateScreen
             );
         } else {
-            let _ = execute!(self.terminal.backend_mut(), Show, DisableBracketedPaste);
+            let _ = execute!(
+                self.terminal.backend_mut(),
+                Show,
+                DisableBracketedPaste,
+                DisableMouseCapture
+            );
         }
         if self.raw_mode_enabled {
             let _ = disable_raw_mode();

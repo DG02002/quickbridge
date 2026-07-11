@@ -12,7 +12,7 @@ use quickbridge_core::{
     Command as PromptCommand, JumpEvent, JumpStep, LaunchEvent, LaunchStep, MediaInfo,
     PlaybackMode, PlaybackSnapshot, PlayerState, PrepareEvent, PrepareStep, ProgressEvent,
     ProgressSink, RunOutcome, SeekSupport, SimulationScenario, SourceInspection, StreamSelection,
-    Timecode, TrackSelectionRequest, help_text, parse_command, resolve_target,
+    Timecode, TrackSelectionRequest, parse_command, resolve_target,
 };
 use quickbridge_runtime::{
     FfmpegRunner, PlaybackCoordinator, PrepareRequest, PreparedSource, ProbeRunner, RuntimeError,
@@ -162,10 +162,9 @@ async fn prompt_for_source_url(
     loop {
         match events.next().await? {
             AppEvent::CtrlC => return Ok(SourcePromptResult::Interrupted),
-            AppEvent::Resize | AppEvent::Tick => {
-                state.tick();
-                runtime.draw(state)?;
-            }
+            AppEvent::Resize => runtime.draw(state)?,
+            AppEvent::Tick if state.tick() => runtime.draw(state)?,
+            AppEvent::Tick => {}
             AppEvent::Paste(text) => {
                 state.append_input(&text);
                 runtime.draw(state)?;
@@ -178,6 +177,12 @@ async fn prompt_for_source_url(
                     KeyCode::Backspace => {
                         state.pop_input();
                     }
+                    KeyCode::Left => state.move_input_cursor(false),
+                    KeyCode::Right => state.move_input_cursor(true),
+                    KeyCode::Home => state.move_input_cursor_to_edge(false),
+                    KeyCode::End => state.move_input_cursor_to_edge(true),
+                    KeyCode::F(1) => state.toggle_launcher_help(),
+                    KeyCode::Esc => state.close_launcher_help(),
                     KeyCode::Enter => match submit_source_input(state) {
                         SourcePromptResult::Ready(url) => {
                             return Ok(SourcePromptResult::Ready(url));
@@ -202,6 +207,7 @@ async fn prompt_for_source_url(
                 runtime.draw(state)?;
             }
             AppEvent::Key(_) => {}
+            AppEvent::ScrollUp | AppEvent::ScrollDown => {}
         }
     }
 }
@@ -215,7 +221,8 @@ async fn recover_source(
     loop {
         match events.next().await? {
             AppEvent::CtrlC => return Ok(SourceRecoveryAction::Interrupted),
-            AppEvent::Resize | AppEvent::Tick => runtime.draw(state)?,
+            AppEvent::Resize => runtime.draw(state)?,
+            AppEvent::Tick => {}
             AppEvent::Paste(text) => state.append_input(&text),
             AppEvent::Key(key) if should_handle_key(key) => {
                 let editing = matches!(&state.screen, Screen::SourceError(error) if error.editing);
@@ -244,6 +251,7 @@ async fn recover_source(
                 runtime.draw(state)?;
             }
             AppEvent::Key(_) => {}
+            AppEvent::ScrollUp | AppEvent::ScrollDown => {}
         }
     }
 }
@@ -277,10 +285,13 @@ async fn choose_tracks(
     loop {
         match events.next().await? {
             AppEvent::CtrlC => return Err(UiError::Interrupted),
-            AppEvent::Resize | AppEvent::Tick => runtime.draw(state)?,
+            AppEvent::Resize => runtime.draw(state)?,
+            AppEvent::Tick => {}
             AppEvent::Paste(text) => {
-                if text.contains('\n') {
-                    return state.confirm_track_selection();
+                if text.contains('\n')
+                    && let Some(selection) = state.advance_or_confirm_track_selection()?
+                {
+                    return Ok(selection);
                 }
             }
             AppEvent::Key(key_event) if should_handle_key(key_event) => match key_event.code {
@@ -291,10 +302,15 @@ async fn choose_tracks(
                 KeyCode::Down => state.move_track_selection(1),
                 KeyCode::Left | KeyCode::BackTab => state.switch_track_focus(false),
                 KeyCode::Right | KeyCode::Tab => state.switch_track_focus(true),
-                KeyCode::Enter => return state.confirm_track_selection(),
+                KeyCode::Enter => {
+                    if let Some(selection) = state.advance_or_confirm_track_selection()? {
+                        return Ok(selection);
+                    }
+                }
                 _ => {}
             },
             AppEvent::Key(_) => {}
+            AppEvent::ScrollUp | AppEvent::ScrollDown => {}
         }
         runtime.draw(state)?;
     }
@@ -313,13 +329,16 @@ async fn run_live_loop(
             AppEvent::CtrlC => return Ok(RunOutcome::Interrupted),
             AppEvent::Resize => runtime.draw(state)?,
             AppEvent::Tick => {
-                state.tick();
+                let mut needs_draw = state.tick();
                 if last_snapshot_refresh.elapsed() >= Duration::from_secs(1) {
                     let snapshot = playback.snapshot(Instant::now()).await;
                     state.update_snapshot(snapshot);
                     last_snapshot_refresh = Instant::now();
+                    needs_draw = true;
                 }
-                runtime.draw(state)?;
+                if needs_draw {
+                    runtime.draw(state)?;
+                }
             }
             AppEvent::Paste(text) => {
                 state.append_input(&text);
@@ -338,6 +357,14 @@ async fn run_live_loop(
                 }
             }
             AppEvent::Key(_) => {}
+            AppEvent::ScrollUp => {
+                state.scroll_activity(true);
+                runtime.draw(state)?;
+            }
+            AppEvent::ScrollDown => {
+                state.scroll_activity(false);
+                runtime.draw(state)?;
+            }
         }
     }
 }
@@ -352,8 +379,33 @@ async fn handle_running_key_event(
         KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
             Ok(RunningAction::Interrupted)
         }
+        KeyCode::Esc => {
+            state.close_running_overlay();
+            runtime.draw(state)?;
+            Ok(RunningAction::Continue)
+        }
         KeyCode::Backspace => {
             state.pop_input();
+            runtime.draw(state)?;
+            Ok(RunningAction::Continue)
+        }
+        KeyCode::Left => {
+            state.move_input_cursor(false);
+            runtime.draw(state)?;
+            Ok(RunningAction::Continue)
+        }
+        KeyCode::Right => {
+            state.move_input_cursor(true);
+            runtime.draw(state)?;
+            Ok(RunningAction::Continue)
+        }
+        KeyCode::Home => {
+            state.move_input_cursor_to_edge(false);
+            runtime.draw(state)?;
+            Ok(RunningAction::Continue)
+        }
+        KeyCode::End => {
+            state.move_input_cursor_to_edge(true);
             runtime.draw(state)?;
             Ok(RunningAction::Continue)
         }
@@ -385,7 +437,7 @@ async fn submit_input(
         Ok(Some(command)) => command,
         Ok(None) => return Ok(RunningAction::Continue),
         Err(error) => {
-            state.push_history_warning(format!("Couldn't understand that command: {error}"));
+            state.push_history_warning(format!("Enter a valid time or command. {error}"));
             runtime.draw(state)?;
             return Ok(RunningAction::Continue);
         }
@@ -397,17 +449,17 @@ async fn submit_input(
 
     match command {
         PromptCommand::Help => {
-            state.show_details(help_text());
+            state.show_help();
         }
         PromptCommand::Reopen => match playback.reopen_player().await {
             Ok(()) => {
                 state.update_snapshot(playback.snapshot(Instant::now()).await);
                 state.set_player_action_error(None);
-                state.push_history_info("Opened the current stream in QuickTime Player again.");
+                state.push_history_info("Reopened the stream in QuickTime Player.");
             }
             Err(error) => {
                 state.set_player_action_error(Some(format!(
-                    "Couldn't reopen QuickTime Player: {error}. Type `reopen` to retry."
+                    "Unable to reopen QuickTime Player: {error}. Enter `reopen` to try again."
                 )));
             }
         },
@@ -440,7 +492,9 @@ async fn submit_input(
                 }
                 Err(error) => {
                     state.finish_jump();
-                    state.push_history_warning(format!("Couldn't jump to that time: {error:#}"));
+                    state.push_history_warning(format!(
+                        "Unable to jump to that time: {error:#}. Try another time."
+                    ));
                 }
             }
         }
@@ -460,12 +514,8 @@ fn submit_source_input(state: &mut AppState) -> SourcePromptResult {
     state.record_command(trimmed);
     match trimmed {
         "help" | "h" | "?" | "/help" => {
-            state.push_history_info(
-                "Run `/url https://example.com/video.mkv` to inspect and start a relay session.",
-            );
-            state.push_history_muted(
-                "You can also paste a full `http://` or `https://` media URL and press Enter.",
-            );
+            state.push_history_info("Enter a direct media URL to start a session.");
+            state.push_history_muted("Example: https://example.com/video.mkv");
             SourcePromptResult::Continue
         }
         "quit" | "q" | "exit" => SourcePromptResult::Completed,
@@ -473,7 +523,7 @@ fn submit_source_input(state: &mut AppState) -> SourcePromptResult {
             if let Some(rest) = trimmed.strip_prefix("/url") {
                 let url = rest.trim();
                 if url.is_empty() {
-                    state.push_history_warning("`/url` needs a media URL, for example `/url https://example.com/video.mkv`.");
+                    state.push_history_warning("Add a media URL after `/url`, such as `/url https://example.com/video.mkv`.");
                     SourcePromptResult::Continue
                 } else {
                     SourcePromptResult::Ready(url.to_string())
@@ -481,7 +531,9 @@ fn submit_source_input(state: &mut AppState) -> SourcePromptResult {
             } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
                 SourcePromptResult::Ready(trimmed.to_string())
             } else {
-                state.push_history_warning("Enter a media URL directly or use `/url <media-url>`.");
+                state.push_history_warning(
+                    "Enter a full media URL that starts with `http://` or `https://`.",
+                );
                 SourcePromptResult::Continue
             }
         }
@@ -608,13 +660,16 @@ where
         }
     }
 
-    pub(crate) fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) -> bool {
         if self
             .lines
             .iter()
             .any(|line| line.status == ProgressStatus::Active)
         {
             self.frame_index = (self.frame_index + 1) % ACTIVE_FRAMES.len();
+            true
+        } else {
+            false
         }
     }
 }
@@ -636,7 +691,9 @@ pub(crate) struct TrackSelectionState {
 #[derive(Clone, Debug)]
 pub(crate) struct LauncherState {
     pub(crate) input: String,
+    pub(crate) cursor: usize,
     pub(crate) history: Vec<HistoryEntry>,
+    pub(crate) help_open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -651,12 +708,20 @@ pub(crate) struct SourceErrorState {
 impl SourceErrorState {
     fn from_runtime(attempted_url: String, error: &RuntimeError) -> Self {
         let summary = match error {
-            RuntimeError::InvalidSourceUrl { .. } => "That source URL isn't valid.",
-            RuntimeError::FfprobeUnavailable { .. } => "ffprobe isn't available.",
-            RuntimeError::ExecuteBinary { .. } => "Couldn't start ffprobe.",
-            RuntimeError::FfprobeFailed { .. } => "ffprobe couldn't inspect this source.",
-            RuntimeError::MediaInfoParse(_) => "ffprobe returned malformed source details.",
-            _ => "Couldn't inspect this source.",
+            RuntimeError::InvalidSourceUrl { .. } => {
+                "Enter a full URL that starts with http:// or https://."
+            }
+            RuntimeError::FfprobeUnavailable { .. } => "Install ffprobe, then try again.",
+            RuntimeError::ExecuteBinary { .. } => {
+                "Unable to start ffprobe. Check its path, then try again."
+            }
+            RuntimeError::FfprobeFailed { .. } => {
+                "Unable to inspect this source. Check the URL and access, then try again."
+            }
+            RuntimeError::MediaInfoParse(_) => {
+                "Unable to read this source's media details. Try another source."
+            }
+            _ => "Unable to inspect this source. Check the URL, then try again.",
         };
         Self {
             input: attempted_url.clone(),
@@ -671,8 +736,10 @@ impl SourceErrorState {
         Self {
             input: attempted_url.clone(),
             attempted_url,
-            summary: String::from("This source doesn't contain a supported video track."),
-            diagnostic: String::from("the source does not contain a supported video track"),
+            summary: String::from("No supported video track was found."),
+            diagnostic: String::from(
+                "Choose a source with a supported video track, then try again.",
+            ),
             editing: false,
         }
     }
@@ -680,22 +747,11 @@ impl SourceErrorState {
 
 impl LauncherState {
     fn new() -> Self {
-        let mut history = Vec::new();
-        push_history_lines(
-            &mut history,
-            "·",
-            "Paste a media URL or run `/url https://example.com/video.mkv` to start.",
-            HistoryTone::Info,
-        );
-        push_history_lines(
-            &mut history,
-            "·",
-            "Commands: `/url <media-url>`, `help`, `quit`.",
-            HistoryTone::Muted,
-        );
         Self {
             input: String::new(),
-            history,
+            cursor: 0,
+            history: Vec::new(),
+            help_open: false,
         }
     }
 }
@@ -709,6 +765,7 @@ pub(crate) struct RunningState {
     pub(crate) media_info: MediaInfo,
     pub(crate) snapshot: PlaybackSnapshot,
     pub(crate) input: String,
+    pub(crate) input_cursor: usize,
     pub(crate) jump_progress: Option<ProgressModel<JumpStep>>,
     pub(crate) prepare_history: Vec<HistoryEntry>,
     pub(crate) startup_history: Vec<HistoryEntry>,
@@ -716,6 +773,7 @@ pub(crate) struct RunningState {
     pub(crate) details: Option<String>,
     pub(crate) activity_scroll: usize,
     pub(crate) player_action_error: Option<String>,
+    pub(crate) help_open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -735,12 +793,6 @@ impl RunningState {
         startup: StartupContext,
     ) -> Self {
         let mut history = Vec::new();
-        push_history_lines(
-            &mut history,
-            "·",
-            "Type a timecode like `01:30`, use `+10` or `-10` to jump, or `help` for commands.",
-            HistoryTone::Muted,
-        );
         if startup.requested_start_at != Timecode::ZERO && startup.actual_start_at == Timecode::ZERO
         {
             push_history_lines(
@@ -770,6 +822,7 @@ impl RunningState {
             media_info,
             snapshot,
             input: String::new(),
+            input_cursor: 0,
             jump_progress: None,
             prepare_history: Vec::new(),
             startup_history: Vec::new(),
@@ -777,6 +830,7 @@ impl RunningState {
             details: None,
             activity_scroll: 0,
             player_action_error: None,
+            help_open: false,
         }
     }
 
@@ -958,6 +1012,50 @@ impl AppState {
         self.screen = Screen::SourceError(error);
     }
 
+    fn toggle_launcher_help(&mut self) {
+        if let Screen::Launcher(launcher) = &mut self.screen {
+            launcher.help_open = !launcher.help_open;
+        }
+    }
+
+    fn close_launcher_help(&mut self) {
+        if let Screen::Launcher(launcher) = &mut self.screen {
+            launcher.help_open = false;
+        }
+    }
+
+    fn move_input_cursor(&mut self, forward: bool) {
+        match &mut self.screen {
+            Screen::Launcher(launcher) => {
+                launcher.cursor = if forward {
+                    next_char_boundary(&launcher.input, launcher.cursor)
+                } else {
+                    previous_char_boundary(&launcher.input, launcher.cursor)
+                };
+            }
+            Screen::Running(running) => {
+                running.input_cursor = if forward {
+                    next_char_boundary(&running.input, running.input_cursor)
+                } else {
+                    previous_char_boundary(&running.input, running.input_cursor)
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn move_input_cursor_to_edge(&mut self, end: bool) {
+        match &mut self.screen {
+            Screen::Launcher(launcher) => {
+                launcher.cursor = if end { launcher.input.len() } else { 0 };
+            }
+            Screen::Running(running) => {
+                running.input_cursor = if end { running.input.len() } else { 0 };
+            }
+            _ => {}
+        }
+    }
+
     fn edit_source_error_url(&mut self) {
         if let Screen::SourceError(error) = &mut self.screen {
             error.editing = true;
@@ -983,6 +1081,22 @@ impl AppState {
         }
     }
 
+    fn close_running_overlay(&mut self) {
+        if let Screen::Running(running) = &mut self.screen {
+            running.input.clear();
+            running.input_cursor = 0;
+            running.help_open = false;
+            running.details = None;
+        }
+    }
+
+    fn show_help(&mut self) {
+        if let Screen::Running(running) = &mut self.screen {
+            running.help_open = true;
+            running.details = None;
+        }
+    }
+
     fn current_time(&self) -> Timecode {
         match &self.screen {
             Screen::Running(running) => running.snapshot.current_time(),
@@ -992,8 +1106,14 @@ impl AppState {
 
     fn push_input(&mut self, ch: char) {
         match &mut self.screen {
-            Screen::Launcher(launcher) => launcher.input.push(ch),
-            Screen::Running(running) => running.input.push(ch),
+            Screen::Launcher(launcher) => {
+                launcher.input.insert(launcher.cursor, ch);
+                launcher.cursor += ch.len_utf8();
+            }
+            Screen::Running(running) => {
+                running.input.insert(running.input_cursor, ch);
+                running.input_cursor += ch.len_utf8();
+            }
             Screen::SourceError(error) if error.editing => error.input.push(ch),
             _ => {}
         }
@@ -1001,8 +1121,14 @@ impl AppState {
 
     fn append_input(&mut self, text: &str) {
         match &mut self.screen {
-            Screen::Launcher(launcher) => launcher.input.push_str(text),
-            Screen::Running(running) => running.input.push_str(text),
+            Screen::Launcher(launcher) => {
+                launcher.input.insert_str(launcher.cursor, text);
+                launcher.cursor += text.len();
+            }
+            Screen::Running(running) => {
+                running.input.insert_str(running.input_cursor, text);
+                running.input_cursor += text.len();
+            }
             Screen::SourceError(error) if error.editing => error.input.push_str(text),
             _ => {}
         }
@@ -1011,10 +1137,18 @@ impl AppState {
     fn pop_input(&mut self) {
         match &mut self.screen {
             Screen::Launcher(launcher) => {
-                launcher.input.pop();
+                if launcher.cursor > 0 {
+                    let previous = previous_char_boundary(&launcher.input, launcher.cursor);
+                    launcher.input.drain(previous..launcher.cursor);
+                    launcher.cursor = previous;
+                }
             }
             Screen::Running(running) => {
-                running.input.pop();
+                if running.input_cursor > 0 {
+                    let previous = previous_char_boundary(&running.input, running.input_cursor);
+                    running.input.drain(previous..running.input_cursor);
+                    running.input_cursor = previous;
+                }
             }
             Screen::SourceError(error) if error.editing => {
                 error.input.pop();
@@ -1025,8 +1159,14 @@ impl AppState {
 
     fn take_input(&mut self) -> String {
         match &mut self.screen {
-            Screen::Launcher(launcher) => std::mem::take(&mut launcher.input),
-            Screen::Running(running) => std::mem::take(&mut running.input),
+            Screen::Launcher(launcher) => {
+                launcher.cursor = 0;
+                std::mem::take(&mut launcher.input)
+            }
+            Screen::Running(running) => {
+                running.input_cursor = 0;
+                std::mem::take(&mut running.input)
+            }
             Screen::SourceError(error) if error.editing => std::mem::take(&mut error.input),
             _ => String::new(),
         }
@@ -1047,18 +1187,20 @@ impl AppState {
         }
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self) -> bool {
         match &mut self.screen {
-            Screen::Launcher(_) => {}
+            Screen::Launcher(_) => false,
             Screen::Inspecting { progress } => progress.tick(),
             Screen::Starting { progress, .. } => progress.tick(),
             Screen::Running(running) => {
                 if let Some(progress) = &mut running.jump_progress {
-                    progress.tick();
+                    progress.tick()
+                } else {
+                    false
                 }
             }
-            Screen::TrackSelection(_) => {}
-            Screen::SourceError(_) => {}
+            Screen::TrackSelection(_) => false,
+            Screen::SourceError(_) => false,
         }
     }
 
@@ -1120,6 +1262,17 @@ impl AppState {
         }
     }
 
+    fn advance_or_confirm_track_selection(&mut self) -> Result<Option<StreamSelection>> {
+        let Screen::TrackSelection(selection) = &mut self.screen else {
+            return Err(UiError::TrackSelectionInactive);
+        };
+        if selection.focus == SelectionFocus::Video && !selection.request.audios().is_empty() {
+            selection.focus = SelectionFocus::Audio;
+            return Ok(None);
+        }
+        self.confirm_track_selection().map(Some)
+    }
+
     fn jump_progress_mut(&mut self) -> Option<&mut ProgressModel<JumpStep>> {
         match &mut self.screen {
             Screen::Running(running) => running.jump_progress.as_mut(),
@@ -1172,12 +1325,6 @@ impl AppState {
         }
     }
 
-    fn show_details(&mut self, details: impl Into<String>) {
-        if let Screen::Running(running) = &mut self.screen {
-            running.details = Some(details.into());
-        }
-    }
-
     fn toggle_status_details(&mut self) {
         let details = self.status_text();
         if let Screen::Running(running) = &mut self.screen {
@@ -1185,14 +1332,26 @@ impl AppState {
                 running.details = None;
             } else {
                 running.details = Some(details);
+                running.help_open = false;
             }
         }
     }
 
     fn scroll_activity(&mut self, older: bool) {
         if let Screen::Running(running) = &mut self.screen {
+            let activity_len = running
+                .prepare_history
+                .len()
+                .saturating_add(running.startup_history.len())
+                .saturating_add(running.history.len())
+                .saturating_add(
+                    running
+                        .jump_progress
+                        .as_ref()
+                        .map_or(0, |progress| progress.lines.len()),
+                );
             running.activity_scroll = if older {
-                (running.activity_scroll + 1).min(running.history.len().saturating_sub(1))
+                (running.activity_scroll + 1).min(activity_len.saturating_sub(1))
             } else {
                 running.activity_scroll.saturating_sub(1)
             };
@@ -1234,6 +1393,22 @@ fn push_history_lines(
             tone,
         });
     }
+}
+
+fn previous_char_boundary(text: &str, cursor: usize) -> usize {
+    text[..cursor]
+        .char_indices()
+        .next_back()
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn next_char_boundary(text: &str, cursor: usize) -> usize {
+    text[cursor..]
+        .char_indices()
+        .nth(1)
+        .map(|(index, _)| cursor + index)
+        .unwrap_or(text.len())
 }
 
 fn prepare_history(progress: &ProgressModel<PrepareStep>) -> Vec<HistoryEntry> {
@@ -1469,11 +1644,11 @@ fn poll_for_interrupt() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, RunningState, Screen, SelectionFocus, SourceErrorState, StartupContext,
-        TrackSelectionState, is_recoverable_prepare_error,
+        AppState, RunningState, Screen, SelectionFocus, SourceErrorState, SourcePromptResult,
+        StartupContext, TrackSelectionState, is_recoverable_prepare_error,
     };
     use quickbridge_core::{
-        AudioStream, MediaInfo, PlaybackMode, PlaybackSnapshot, PlayerState, SeekSupport,
+        AudioStream, JumpStep, MediaInfo, PlaybackMode, PlaybackSnapshot, PlayerState, SeekSupport,
         SourceInspection, SourceMetadata, StreamSelection, StreamTelemetry, Timecode, VideoStream,
     };
     use quickbridge_runtime::RuntimeError;
@@ -1540,6 +1715,51 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_video_advances_to_audio_before_confirming() {
+        let request = MediaInfo::new(
+            vec![
+                VideoStream::new(0, "video 0", true),
+                VideoStream::new(1, "video 1", false),
+            ],
+            vec![AudioStream::new(
+                2,
+                Some(String::from("aac")),
+                "audio 0",
+                true,
+            )],
+            None,
+        )
+        .selection_request()
+        .unwrap();
+        let mut state = AppState::new(None);
+        state.screen = Screen::TrackSelection(TrackSelectionState {
+            request,
+            focus: SelectionFocus::Video,
+            video_index: 1,
+            audio_index: Some(0),
+        });
+
+        assert!(
+            state
+                .advance_or_confirm_track_selection()
+                .unwrap()
+                .is_none()
+        );
+        let Screen::TrackSelection(selection) = &state.screen else {
+            unreachable!();
+        };
+        assert_eq!(selection.focus, SelectionFocus::Audio);
+
+        let confirmed = state
+            .advance_or_confirm_track_selection()
+            .unwrap()
+            .expect("audio confirmation should start playback");
+        let output = confirmed.render_output_file();
+        assert!(output.contains("video 1"));
+        assert!(output.contains("audio 0"));
+    }
+
+    #[test]
     fn running_activity_retains_only_the_latest_two_hundred_entries() {
         let mut state = running_state();
         for index in 0..1_000 {
@@ -1588,19 +1808,19 @@ mod tests {
                 RuntimeError::InvalidSourceUrl {
                     source_url: String::from("bad"),
                 },
-                "That source URL isn't valid.",
+                "Enter a full URL that starts with http:// or https://.",
             ),
             (
                 RuntimeError::FfprobeUnavailable {
                     binary: String::from("custom-ffprobe"),
                 },
-                "ffprobe isn't available.",
+                "Install ffprobe, then try again.",
             ),
             (
                 RuntimeError::FfprobeFailed {
                     stderr: String::from("denied"),
                 },
-                "ffprobe couldn't inspect this source.",
+                "Unable to inspect this source. Check the URL and access, then try again.",
             ),
         ];
         for (error, summary) in cases {
@@ -1612,5 +1832,71 @@ mod tests {
 
         let no_video = SourceErrorState::no_video(String::from("source"));
         assert!(no_video.summary.contains("supported video track"));
+    }
+
+    #[test]
+    fn enter_submits_a_direct_launcher_url() {
+        let mut state = AppState::new(None);
+        state.append_input("https://example.com/demo.mkv");
+
+        assert_eq!(
+            super::submit_source_input(&mut state),
+            SourcePromptResult::Ready(String::from("https://example.com/demo.mkv"))
+        );
+    }
+
+    #[test]
+    fn launcher_editor_inserts_and_deletes_at_the_caret() {
+        let mut state = AppState::new(None);
+        state.append_input("https://example.com/mvie.mkv");
+        for _ in 0..7 {
+            state.move_input_cursor(false);
+        }
+        state.push_input('o');
+
+        let Screen::Launcher(launcher) = &state.screen else {
+            unreachable!();
+        };
+        assert_eq!(launcher.input, "https://example.com/movie.mkv");
+        assert_eq!(launcher.cursor, "https://example.com/mo".len());
+    }
+
+    #[test]
+    fn running_composer_and_help_restore_cleanly() {
+        let mut state = running_state();
+        state.append_input("status");
+        let Screen::Running(running) = &state.screen else {
+            unreachable!();
+        };
+        assert_eq!(running.input, "status");
+
+        state.close_running_overlay();
+        state.show_help();
+        let Screen::Running(running) = &state.screen else {
+            unreachable!();
+        };
+        assert!(running.help_open);
+
+        state.close_running_overlay();
+        let Screen::Running(running) = &state.screen else {
+            unreachable!();
+        };
+        assert!(running.input.is_empty());
+        assert!(!running.help_open);
+    }
+
+    #[test]
+    fn idle_screens_do_not_request_periodic_redraws() {
+        let mut launcher = AppState::new(None);
+        assert!(!launcher.tick());
+
+        let mut running = running_state();
+        assert!(!running.tick());
+        running.start_jump();
+        running
+            .jump_progress_mut()
+            .unwrap()
+            .start(JumpStep::PrepareNextStream, Vec::new());
+        assert!(running.tick());
     }
 }

@@ -17,7 +17,7 @@ pub enum Command {
 pub enum CommandParseError {
     #[error("{0}")]
     InvalidTimecode(#[from] crate::TimecodeParseError),
-    #[error("command does not resolve to a timestamp")]
+    #[error("enter a timestamp, such as 01:30")]
     NotATimestampCommand,
 }
 
@@ -31,7 +31,7 @@ pub fn parse_command(line: &str) -> Result<Option<Command>, CommandParseError> {
     match line {
         "help" | "h" | "?" => return Ok(Some(Command::Help)),
         "reopen" | "open" | "r" => return Ok(Some(Command::Reopen)),
-        "status" | "s" => return Ok(Some(Command::Status)),
+        "status" | "details" | "s" => return Ok(Some(Command::Status)),
         "quit" | "q" | "exit" => return Ok(Some(Command::Quit)),
         _ => {}
     }
@@ -52,16 +52,17 @@ pub fn parse_command(line: &str) -> Result<Option<Command>, CommandParseError> {
 /// Render help text for the command composer.
 pub fn help_text() -> String {
     String::from(
-        "Commands\n\
-         HH:MM:SS  Jump to that timestamp\n\
-         MM:SS     Jump to that timestamp\n\
-         SS        Jump to that timestamp\n\
-         +MM:SS    Jump forward from the current playhead\n\
-         -MM:SS    Jump backward from the current playhead\n\
-         reopen    Open the stream again in QuickTime Player\n\
-         status    Show the current stream and playback time\n\
-         help      Show this list\n\
-         quit      Stop quickbridge and close QuickTime Player",
+        "Enter a time or command\n\
+         HH:MM:SS  Jump to a time\n\
+         MM:SS     Jump to a time\n\
+         SS        Jump to a time\n\
+         +MM:SS    Jump forward from the current time\n\
+         -MM:SS    Jump back from the current time\n\
+         reopen    Reopen the stream in QuickTime Player\n\
+         status    Show stream and playback details\n\
+         details   Show stream and playback details\n\
+         help      Show commands\n\
+         quit      Close QuickTime Player and Quickbridge",
     )
 }
 
@@ -87,6 +88,7 @@ mod tests {
         assert_eq!(parse_command("help").unwrap(), Some(Command::Help));
         assert_eq!(parse_command("reopen").unwrap(), Some(Command::Reopen));
         assert_eq!(parse_command("status").unwrap(), Some(Command::Status));
+        assert_eq!(parse_command("details").unwrap(), Some(Command::Status));
         assert_eq!(parse_command("quit").unwrap(), Some(Command::Quit));
     }
 

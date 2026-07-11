@@ -10,9 +10,10 @@ https://example.com/video.mkv
                                                                                                                         
 Activity                                                                                                                
 ✓ Checked source URL                                                                                                    
-⠋ Checking whether time jumps are available                                                                             
-○ Read source details                                                                                                   
-○ Found video and audio tracks                                                                                          
+✓ Time jumps are available                                                                                              
+✓ Started local stream server                                                                                           
+⠋ Starting ffmpeg relay                                                                                                 
+○ QuickTime Player                                                                                                      
                                                                                                                         
                                                                                                                         
                                                                                                                         
@@ -33,12 +34,11 @@ Activity
                                                                                                                         
                                                                                                                         
                                                                                                                         
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
-                                                                                                                        
+Tracks                                                                                                                  
+HEVC • 3840×2160 • HDR10                                                                                                
+English • E-AC-3 • 5.1                                                                                                  
                                                                                                                         
 ╭ Input ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│Inspecting source…                                                                                                    │
+│Starting QuickTime Player…                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 Ctrl+C cancel

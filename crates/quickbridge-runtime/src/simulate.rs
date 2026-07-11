@@ -40,7 +40,7 @@ impl SimulationRuntimeExt for SimulationScenario {
 
         let metadata = SourceMetadata::new(filename_from_url(&source_url), Some(1_377_078_272));
         let seek_support = match scenario {
-            SimulationScenario::HappyPath => SeekSupport::Enabled,
+            SimulationScenario::HappyPath | SimulationScenario::UiTour => SeekSupport::Enabled,
             SimulationScenario::NoRanges => SeekSupport::Disabled {
                 warning: String::from(
                     "This source doesn't appear to support jumping to a different time.",
@@ -53,6 +53,18 @@ impl SimulationRuntimeExt for SimulationScenario {
 
     async fn probe_source(&self, _source_url: &str) -> Result<MediaInfo> {
         sleep(Duration::from_millis(160)).await;
+
+        if matches!(self, SimulationScenario::UiTour) {
+            return Ok(MediaInfo::from_ffprobe_json(
+                r#"{"streams":[
+                  {"index":0,"codec_type":"video","codec_name":"hevc","profile":"Main 10","width":3840,"height":2160,"color_primaries":"bt2020","color_transfer":"smpte2084","disposition":{"default":1}},
+                  {"index":2,"codec_type":"video","codec_name":"hevc","profile":"Main 10","width":3840,"height":2160,"side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":0}]},
+                  {"index":1,"codec_type":"audio","codec_name":"eac3","profile":"Dolby Digital Plus + Dolby Atmos","channels":6,"channel_layout":"5.1","tags":{"language":"eng","title":"English Atmos"},"disposition":{"default":1}},
+                  {"index":3,"codec_type":"audio","codec_name":"truehd","profile":"Dolby TrueHD + Dolby Atmos","channels":8,"channel_layout":"7.1","tags":{"language":"jpn","title":"Japanese Atmos"}},
+                  {"index":4,"codec_type":"audio","codec_name":"aac","channels":2,"channel_layout":"stereo","tags":{"language":"fra","title":"French stereo"}}
+                ],"format":{"duration":"1452.0"}}"#,
+            )?);
+        }
 
         Ok(MediaInfo::new(
             vec![VideoStream::new(
@@ -137,4 +149,25 @@ fn filename_from_url(source_url: &str) -> String {
                 .map(str::to_string)
         })
         .unwrap_or_else(|| String::from("simulation-source.mkv"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SimulationRuntimeExt;
+    use quickbridge_core::SimulationScenario;
+
+    #[tokio::test]
+    async fn ui_tour_exposes_realistic_track_choices() {
+        let media = SimulationScenario::UiTour
+            .probe_source("https://example.com/demo.mkv")
+            .await
+            .unwrap();
+
+        assert_eq!(media.videos().len(), 2);
+        assert_eq!(media.audios().len(), 3);
+        assert_eq!(media.videos()[0].dimensions(), Some((3840, 2160)));
+        assert_eq!(media.videos()[1].dolby_vision().unwrap().profile(), 5);
+        assert!(media.audios()[0].is_atmos());
+        assert_eq!(media.audios()[1].codec_name.as_deref(), Some("truehd"));
+    }
 }
