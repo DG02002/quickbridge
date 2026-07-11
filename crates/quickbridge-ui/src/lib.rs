@@ -5,7 +5,6 @@ mod error;
 mod event;
 mod render;
 mod runtime;
-#[cfg(test)]
 mod terminal_detection;
 mod text;
 

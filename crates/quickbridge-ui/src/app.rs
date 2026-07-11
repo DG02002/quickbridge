@@ -1,6 +1,7 @@
 use super::{
     event::{AppEvent, AppEventStream},
     runtime::{RuntimeOptions, TuiRuntime},
+    terminal_detection::TerminalInfo,
 };
 use crate::{
     InteractiveOptions, Result, UiError,
@@ -26,9 +27,8 @@ pub async fn run_interactive(
     runner: FfmpegRunner,
     probe: ProbeRunner,
 ) -> Result<RunOutcome> {
-    let mut runtime = TuiRuntime::enter(RuntimeOptions {
-        use_alt_screen: false,
-    })?;
+    let runtime_options = runtime_options(&cli, &TerminalInfo::detect());
+    let mut runtime = TuiRuntime::enter(runtime_options)?;
     let mut state = AppState::new(cli.url.clone());
     runtime.draw(&state)?;
     let source_url = match cli.url {
@@ -127,6 +127,12 @@ pub async fn run_interactive(
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(UiError::from(error)),
         (Ok(outcome), Ok(())) => Ok(outcome),
+    }
+}
+
+fn runtime_options(cli: &InteractiveOptions, terminal: &TerminalInfo) -> RuntimeOptions {
+    RuntimeOptions {
+        use_alt_screen: terminal.should_use_alt_screen(cli.no_alt_screen),
     }
 }
 

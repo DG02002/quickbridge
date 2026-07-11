@@ -10,7 +10,6 @@ pub struct TerminalInfo {
 }
 
 impl TerminalInfo {
-    #[allow(dead_code)]
     pub fn detect() -> Self {
         Self::from_env(
             io::stdin().is_terminal(),
@@ -42,7 +41,7 @@ impl TerminalInfo {
     }
 
     pub fn should_use_alt_screen(&self, no_alt_screen: bool) -> bool {
-        self.supports_interactive_ui() && !no_alt_screen && !self.is_zellij()
+        self.supports_interactive_ui() && !no_alt_screen
     }
 
     pub fn is_dumb_terminal(&self) -> bool {
@@ -51,6 +50,7 @@ impl TerminalInfo {
             .is_some_and(|term| term.eq_ignore_ascii_case("dumb"))
     }
 
+    #[cfg(test)]
     pub fn is_zellij(&self) -> bool {
         self.zellij_session
             .as_deref()
@@ -76,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn disables_alt_screen_in_zellij() {
+    fn allows_alt_screen_in_zellij_0_44() {
         let info = TerminalInfo::from_env(
             true,
             true,
@@ -87,7 +87,8 @@ mod tests {
 
         assert_eq!(info.term_program(), Some("iTerm.app"));
         assert!(info.is_zellij());
-        assert!(!info.should_use_alt_screen(false));
+        assert!(info.should_use_alt_screen(false));
+        assert!(!info.should_use_alt_screen(true));
     }
 
     #[test]
@@ -102,5 +103,20 @@ mod tests {
 
         assert!(info.supports_interactive_ui());
         assert!(info.should_use_alt_screen(false));
+        assert!(!info.should_use_alt_screen(true));
+    }
+
+    #[test]
+    fn requires_both_input_and_output_ttys_for_alt_screen() {
+        for (stdin, stdout) in [(false, true), (true, false), (false, false)] {
+            let info = TerminalInfo::from_env(
+                stdin,
+                stdout,
+                Some(String::from("xterm-256color")),
+                None,
+                None,
+            );
+            assert!(!info.should_use_alt_screen(false));
+        }
     }
 }
