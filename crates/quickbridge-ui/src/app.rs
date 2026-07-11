@@ -537,7 +537,6 @@ pub(crate) struct TrackSelectionState {
     pub(crate) focus: SelectionFocus,
     pub(crate) video_index: usize,
     pub(crate) audio_index: Option<usize>,
-    pub(crate) prepare_history: Vec<HistoryEntry>,
 }
 
 #[derive(Clone, Debug)]
@@ -778,7 +777,6 @@ impl AppState {
             },
             video_index: request.default_video_index(),
             audio_index: request.default_audio_index(),
-            prepare_history: self.prepare_history.clone(),
             request,
         });
     }
@@ -933,14 +931,6 @@ impl AppState {
         }
     }
 
-    pub(crate) fn track_selection_scroll_offset(&self, viewport_height: usize) -> usize {
-        let Screen::TrackSelection(selection) = &self.screen else {
-            return 0;
-        };
-
-        track_selection_scroll_offset(selection, viewport_height)
-    }
-
     fn confirm_track_selection(&self) -> Result<StreamSelection> {
         match &self.screen {
             Screen::TrackSelection(selection) => Ok(selection
@@ -1035,43 +1025,6 @@ fn push_history_lines(
             tone,
         });
     }
-}
-
-fn track_selection_scroll_offset(selection: &TrackSelectionState, viewport_height: usize) -> usize {
-    if viewport_height == 0 {
-        return 0;
-    }
-
-    let selected_line = track_selection_selected_line(selection);
-    selected_line.saturating_sub(viewport_height.saturating_sub(4))
-}
-
-fn track_selection_selected_line(selection: &TrackSelectionState) -> usize {
-    let mut line = 0_usize;
-    line += 1; // version
-    line += 1; // blank
-    line += 1; // inspect title
-    line += selection.prepare_history.len();
-    line += 1; // blank
-    line += 1; // select tracks title
-
-    let has_video_section = selection.request.videos().len() > 1;
-    if has_video_section {
-        line += 1; // video title
-        if selection.focus == SelectionFocus::Video {
-            return line + selection.video_index;
-        }
-        line += selection.request.videos().len();
-        line += 1; // blank
-    }
-
-    line += 1; // audio title
-    let audio_index = selection.audio_index.unwrap_or_default();
-    if selection.focus == SelectionFocus::Audio {
-        return line + audio_index;
-    }
-
-    line
 }
 
 fn prepare_history(progress: &ProgressModel<PrepareStep>) -> Vec<HistoryEntry> {
@@ -1302,4 +1255,43 @@ fn poll_for_interrupt() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppState, Screen, SelectionFocus, TrackSelectionState};
+    use quickbridge_core::{AudioStream, MediaInfo, VideoStream};
+
+    #[test]
+    fn switching_track_focus_preserves_both_selections() {
+        let request = MediaInfo::new(
+            vec![
+                VideoStream::new(0, "video 0", true),
+                VideoStream::new(1, "video 1", false),
+            ],
+            vec![
+                AudioStream::new(2, Some(String::from("aac")), "audio 0", true),
+                AudioStream::new(3, Some(String::from("aac")), "audio 1", false),
+            ],
+            None,
+        )
+        .selection_request()
+        .unwrap();
+        let mut state = AppState::new(None);
+        state.screen = Screen::TrackSelection(TrackSelectionState {
+            request,
+            focus: SelectionFocus::Video,
+            video_index: 1,
+            audio_index: Some(1),
+        });
+
+        state.switch_track_focus(true);
+
+        let Screen::TrackSelection(selection) = &state.screen else {
+            unreachable!();
+        };
+        assert_eq!(selection.focus, SelectionFocus::Audio);
+        assert_eq!(selection.video_index, 1);
+        assert_eq!(selection.audio_index, Some(1));
+    }
 }

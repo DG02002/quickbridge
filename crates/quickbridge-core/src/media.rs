@@ -150,6 +150,11 @@ impl MediaInfo {
                 Some("audio") => audios.push(AudioStream {
                     stream_index: stream.index,
                     codec_name: stream.codec_name,
+                    profile: stream.profile,
+                    language: stream.tags.as_ref().and_then(|tags| tags.language.clone()),
+                    title: stream.tags.as_ref().and_then(|tags| tags.title.clone()),
+                    channel_layout: stream.channel_layout,
+                    channels: stream.channels,
                     display_line,
                     is_default: stream
                         .disposition
@@ -443,6 +448,9 @@ impl VideoStream {
     pub fn dolby_vision(&self) -> Option<&DolbyVisionConfig> {
         self.dolby_vision.as_ref()
     }
+    pub fn is_default(&self) -> bool {
+        self.is_default
+    }
 
     pub fn apple_packaging(&self) -> Result<VideoPackaging, VideoPackagingError> {
         match self.codec_name.as_deref() {
@@ -492,6 +500,11 @@ impl VideoStream {
 pub struct AudioStream {
     pub stream_index: usize,
     pub codec_name: Option<String>,
+    profile: Option<String>,
+    language: Option<String>,
+    title: Option<String>,
+    channel_layout: Option<String>,
+    channels: Option<u32>,
     display_line: String,
     is_default: bool,
 }
@@ -506,6 +519,11 @@ impl AudioStream {
         Self {
             stream_index,
             codec_name,
+            profile: None,
+            language: None,
+            title: None,
+            channel_layout: None,
+            channels: None,
             display_line: display_line.into(),
             is_default,
         }
@@ -513,6 +531,34 @@ impl AudioStream {
 
     pub fn display_line(&self) -> &str {
         &self.display_line
+    }
+
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
+    }
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+    pub fn channel_layout(&self) -> Option<&str> {
+        self.channel_layout.as_deref()
+    }
+    pub fn channels(&self) -> Option<u32> {
+        self.channels
+    }
+    pub fn is_atmos(&self) -> bool {
+        self.profile
+            .as_deref()
+            .is_some_and(|profile| profile.to_ascii_lowercase().contains("atmos"))
+            || self
+                .title
+                .as_deref()
+                .is_some_and(|title| title.to_ascii_lowercase().contains("atmos"))
+    }
+    pub fn is_default(&self) -> bool {
+        self.is_default
     }
 }
 
@@ -866,6 +912,7 @@ struct FfprobeFormat {
 #[derive(Debug, Deserialize)]
 struct FfprobeTags {
     language: Option<String>,
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -995,6 +1042,24 @@ mod tests {
         let selection = media.default_selection().unwrap();
         assert_eq!(selection.video_stream_index(), 0);
         assert_eq!(selection.audio_stream_index(), Some(1));
+    }
+
+    #[test]
+    fn exposes_structured_audio_metadata_without_parsing_display_text() {
+        let media = MediaInfo::from_ffprobe_json(
+            r#"{"streams":[{"index":1,"codec_type":"audio","codec_name":"truehd","profile":"Dolby TrueHD + Dolby Atmos","channels":8,"channel_layout":"7.1","tags":{"language":"eng","title":"Original theatrical mix"},"disposition":{"default":1}}]}"#,
+        )
+        .unwrap();
+
+        let audio = &media.audios()[0];
+        assert_eq!(audio.codec_name.as_deref(), Some("truehd"));
+        assert_eq!(audio.profile(), Some("Dolby TrueHD + Dolby Atmos"));
+        assert_eq!(audio.language(), Some("eng"));
+        assert_eq!(audio.title(), Some("Original theatrical mix"));
+        assert_eq!(audio.channel_layout(), Some("7.1"));
+        assert_eq!(audio.channels(), Some(8));
+        assert!(audio.is_atmos());
+        assert!(audio.is_default());
     }
 
     #[test]

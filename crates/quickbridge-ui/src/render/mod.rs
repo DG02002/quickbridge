@@ -3,9 +3,10 @@ use super::app::{
     RunningState, Screen, TrackSelectionState,
 };
 use crate::text::{format_bytes, format_bytes_per_second, format_playback_time};
-use quickbridge_core::{JumpStep, LaunchStep, PlayerState, PrepareStep};
+use quickbridge_core::{AudioStream, JumpStep, LaunchStep, PlayerState, PrepareStep, VideoStream};
 use ratatui::{
     Frame,
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
@@ -16,14 +17,7 @@ const ACTIVE_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 pub(crate) fn render(frame: &mut Frame<'_>, state: &AppState) {
     let width = frame.area().width as usize;
     if let Screen::TrackSelection(selection) = &state.screen {
-        let lines = track_selection_lines(state, selection);
-        let scroll = state.track_selection_scroll_offset(frame.area().height as usize);
-        frame.render_widget(
-            Paragraph::new(lines)
-                .scroll((scroll as u16, 0))
-                .wrap(Wrap { trim: false }),
-            frame.area(),
-        );
+        render_track_selection(frame, state, selection);
         return;
     }
 
@@ -146,51 +140,102 @@ fn starting_screen_lines(
     lines
 }
 
-fn track_selection_lines(state: &AppState, selection: &TrackSelectionState) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::styled(state.version.clone(), version_style())];
-    lines.push(Line::raw(""));
-    lines.push(section_title("Inspect source"));
-    lines.extend(history_lines(&selection.prepare_history));
-    lines.push(Line::raw(""));
-    lines.push(section_title("Select tracks"));
-    if selection.request.videos().len() > 1 {
-        lines.push(Line::styled("Video".to_string(), label_style()));
-        lines.extend(
-            selection
-                .request
-                .videos()
-                .iter()
-                .enumerate()
-                .map(|(index, stream)| {
-                    selectable_line(index == selection.video_index, stream.display_line())
-                }),
+fn render_track_selection(
+    frame: &mut Frame<'_>,
+    state: &AppState,
+    selection: &TrackSelectionState,
+) {
+    let area = frame.area();
+    if area.width < 30 || area.height < 10 {
+        frame.render_widget(
+            Paragraph::new(vec![
+                section_title("Terminal too small"),
+                Line::styled("Resize to at least 30×10.", detail_style()),
+            ]),
+            area,
         );
+        return;
+    }
+
+    let regions = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(state.version.clone(), version_style()),
+            Line::raw(""),
+            section_title("Select tracks"),
+        ]),
+        regions[0],
+    );
+
+    let (lines, focused_line) = track_selection_choice_lines(selection, area.width as usize);
+    let viewport_height = usize::from(regions[1].height);
+    let scroll = focused_line.saturating_sub(viewport_height.saturating_sub(1));
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), regions[1]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::raw(""),
+            Line::styled(
+                "↑↓ choose • Tab switch section • Enter play",
+                detail_style(),
+            ),
+        ]),
+        regions[2],
+    );
+}
+
+fn track_selection_choice_lines(
+    selection: &TrackSelectionState,
+    width: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let mut lines = Vec::new();
+    let mut focused_line = 0;
+    if selection.request.videos().len() > 1 {
+        lines.push(focus_heading(
+            "Video",
+            selection.focus == super::app::SelectionFocus::Video,
+        ));
+        for (index, stream) in selection.request.videos().iter().enumerate() {
+            let active = selection.focus == super::app::SelectionFocus::Video
+                && index == selection.video_index;
+            if active {
+                focused_line = lines.len();
+            }
+            lines.push(selectable_line(
+                active,
+                index == selection.video_index,
+                compact_video_label(stream),
+            ));
+        }
         lines.push(Line::raw(""));
     }
-    lines.push(Line::styled("Audio".to_string(), label_style()));
-    if selection.request.audios().is_empty() {
-        lines.push(Line::styled(
-            "No audio track available".to_string(),
-            detail_style(),
-        ));
-    } else {
-        lines.extend(
-            selection
-                .request
-                .audios()
-                .iter()
-                .enumerate()
-                .map(|(index, stream)| {
-                    selectable_line(selection.audio_index == Some(index), stream.display_line())
-                }),
-        );
-    }
-    lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        "Arrow keys move • Enter confirm".to_string(),
-        detail_style(),
+    lines.push(focus_heading(
+        "Audio",
+        selection.focus == super::app::SelectionFocus::Audio,
     ));
-    lines
+    if selection.request.audios().is_empty() {
+        lines.push(Line::styled("  No audio track available", detail_style()));
+    } else {
+        for (index, stream) in selection.request.audios().iter().enumerate() {
+            let active = selection.focus == super::app::SelectionFocus::Audio
+                && selection.audio_index == Some(index);
+            if active {
+                focused_line = lines.len();
+            }
+            lines.push(selectable_line(
+                active,
+                selection.audio_index == Some(index),
+                compact_audio_label(stream, width.saturating_sub(2)),
+            ));
+        }
+    }
+    (lines, focused_line)
 }
 
 fn running_lines(state: &AppState, running: &RunningState, width: usize) -> Vec<Line<'static>> {
@@ -317,18 +362,108 @@ fn visual_line_height(line: &Line<'static>, width: usize) -> usize {
     content_width.max(1).div_ceil(width)
 }
 
-fn selectable_line(selected: bool, text: &str) -> Line<'static> {
-    if selected {
+fn focus_heading(label: &str, focused: bool) -> Line<'static> {
+    if focused {
+        Line::styled(format!("▸ {label}"), accent_style())
+    } else {
+        Line::styled(format!("  {label}"), label_style())
+    }
+}
+
+fn selectable_line(active: bool, selected: bool, text: String) -> Line<'static> {
+    if active {
         Line::from(vec![
-            Span::styled("> ", selected_line_style()),
-            Span::styled(text.to_owned(), selected_line_style()),
+            Span::styled("› ", selected_line_style()),
+            Span::styled(text, selected_line_style()),
+        ])
+    } else if selected {
+        Line::from(vec![
+            Span::styled("✓ ", success_style()),
+            Span::styled(text, text_style()),
         ])
     } else {
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(text.to_owned(), text_style()),
-        ])
+        Line::from(vec![Span::raw("  "), Span::styled(text, text_style())])
     }
+}
+
+fn compact_video_label(stream: &VideoStream) -> String {
+    let codec = match stream.codec_name() {
+        Some("h264") => "H.264".to_string(),
+        Some("hevc") => "HEVC".to_string(),
+        Some(codec) => codec.to_ascii_uppercase(),
+        None => "Unknown codec".to_string(),
+    };
+    let resolution = stream
+        .dimensions()
+        .map(|(width, height)| format!("{width}×{height}"))
+        .unwrap_or_else(|| "Unknown resolution".to_string());
+    let dynamic_range = if let Some(config) = stream.dolby_vision() {
+        format!("Dolby Vision P{}", config.profile())
+    } else {
+        match stream.color_transfer() {
+            Some("smpte2084") => "HDR10",
+            Some("arib-std-b67") => "HLG",
+            _ => "SDR",
+        }
+        .to_string()
+    };
+    format!(
+        "{codec} • {resolution} • {dynamic_range}{}",
+        if stream.is_default() {
+            " • default"
+        } else {
+            ""
+        }
+    )
+}
+
+fn compact_audio_label(stream: &AudioStream, width: usize) -> String {
+    let identity = stream
+        .title()
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| stream.language().filter(|language| !language.is_empty()))
+        .unwrap_or("Unknown language");
+    let codec = match stream.codec_name.as_deref() {
+        Some("truehd") => "TrueHD",
+        Some("eac3") => "E-AC-3",
+        Some("ac3") => "AC-3",
+        Some("aac") => "AAC",
+        Some("dts") => "DTS",
+        Some(codec) => codec,
+        None => "Unknown codec",
+    };
+    let handling = if matches!(stream.codec_name.as_deref(), Some("truehd" | "dts")) {
+        format!("{codec} → ALAC")
+    } else {
+        codec.to_string()
+    };
+    let channels = stream
+        .channel_layout()
+        .map(str::to_string)
+        .or_else(|| stream.channels().map(|channels| format!("{channels} ch")));
+    let mut parts = vec![identity.to_string(), handling];
+    if let Some(channels) = channels {
+        parts.push(channels);
+    }
+    if stream.is_atmos() {
+        parts.push("Atmos".to_string());
+    }
+    if stream.is_default() {
+        parts.push("default".to_string());
+    }
+    truncate_label(&parts.join(" • "), width)
+}
+
+fn truncate_label(label: &str, width: usize) -> String {
+    if label.chars().count() <= width {
+        return label.to_string();
+    }
+    if width <= 1 {
+        return "…".to_string();
+    }
+    let mut truncated = label.chars().take(width - 1).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 fn history_line(entry: &HistoryEntry) -> Line<'static> {
@@ -624,7 +759,7 @@ mod tests {
             Some(Timecode::from_seconds(60)),
         );
         let request = media_info.selection_request().unwrap();
-        let state = AppState {
+        let mut state = AppState {
             version: String::from("quickbridge 0.1.0"),
             source_url: String::from("https://example.com/video.mkv"),
             prepare_history: vec![
@@ -644,25 +779,95 @@ mod tests {
                 focus: SelectionFocus::Video,
                 video_index: 1,
                 audio_index: Some(0),
-                prepare_history: vec![
-                    HistoryEntry {
-                        prefix: String::from("✓"),
-                        text: String::from("Checked source URL"),
-                        tone: HistoryTone::Info,
-                    },
-                    HistoryEntry {
-                        prefix: String::from("✓"),
-                        text: String::from("Time jumps are available"),
-                        tone: HistoryTone::Info,
-                    },
-                ],
             }),
         };
 
         let contents = render_contents_with_size(&state, 80, 24);
         assert!(contents.contains("Select tracks"));
-        assert!(contents.contains("> Stream #0:2: Video: hevc"));
+        assert!(contents.contains("› H.264 • Unknown resolution • SDR"));
+        assert_eq!(contents.matches('›').count(), 1);
+        assert!(contents.contains("✓ Unknown language • AAC • default"));
+        assert!(contents.contains("↑↓ choose • Tab switch section • Enter play"));
         assert_snapshot!("track_selection_screen_80x24", contents);
+        assert_snapshot!(
+            "track_selection_screen_120x40",
+            render_contents_with_size(&state, 120, 40)
+        );
+
+        let Screen::TrackSelection(selection) = &mut state.screen else {
+            unreachable!();
+        };
+        selection.focus = SelectionFocus::Audio;
+        let contents = render_contents_with_size(&state, 60, 18);
+        assert_eq!(contents.matches('›').count(), 1);
+        assert!(contents.contains("✓ H.264 • Unknown resolution • SDR"));
+        assert!(contents.contains("↑↓ choose • Tab switch section • Enter play"));
+        assert_snapshot!("track_selection_screen_60x18", contents);
+    }
+
+    #[test]
+    fn track_selection_renders_structured_hdr_and_audio_conversion() {
+        let media_info = MediaInfo::from_ffprobe_json(
+            r#"{"streams":[
+              {"index":0,"codec_type":"video","codec_name":"hevc","width":3840,"height":2160,"color_transfer":"smpte2084","disposition":{"default":1}},
+              {"index":1,"codec_type":"video","codec_name":"hevc","width":3840,"height":2160,"side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":0}]},
+              {"index":2,"codec_type":"audio","codec_name":"truehd","profile":"Dolby TrueHD + Dolby Atmos","channel_layout":"7.1","tags":{"language":"eng","title":"English theatrical mix"},"disposition":{"default":1}}
+            ]}"#,
+        )
+        .unwrap();
+        let state = AppState {
+            version: String::from("quickbridge 0.1.0"),
+            source_url: String::new(),
+            prepare_history: Vec::new(),
+            screen: Screen::TrackSelection(TrackSelectionState {
+                request: media_info.selection_request().unwrap(),
+                focus: SelectionFocus::Video,
+                video_index: 0,
+                audio_index: Some(0),
+            }),
+        };
+
+        let contents = render_contents_with_size(&state, 80, 24);
+        assert!(contents.contains("HEVC • 3840×2160 • HDR10 • default"));
+        assert!(contents.contains("HEVC • 3840×2160 • Dolby Vision P5"));
+        assert!(contents.contains("TrueHD → ALAC • 7.1 • Atmos • default"));
+    }
+
+    #[test]
+    fn track_selection_scrolls_long_lists_and_handles_tiny_terminals() {
+        let media_info = MediaInfo::new(
+            vec![VideoStream::new(0, "video", true)],
+            (0..18)
+                .map(|index| {
+                    AudioStream::new(
+                        index + 1,
+                        Some(String::from("aac")),
+                        format!("audio {index}"),
+                        index == 0,
+                    )
+                })
+                .collect(),
+            None,
+        );
+        let state = AppState {
+            version: String::from("quickbridge 0.1.0"),
+            source_url: String::new(),
+            prepare_history: Vec::new(),
+            screen: Screen::TrackSelection(TrackSelectionState {
+                request: media_info.selection_request().unwrap(),
+                focus: SelectionFocus::Audio,
+                video_index: 0,
+                audio_index: Some(17),
+            }),
+        };
+
+        let contents = render_contents_with_size(&state, 120, 40);
+        assert!(contents.contains("› Unknown language • AAC"));
+        assert!(contents.contains("↑↓ choose • Tab switch section • Enter play"));
+        assert_snapshot!("track_selection_long_list_120x40", contents);
+
+        let tiny = render_contents_with_size(&state, 20, 6);
+        assert!(tiny.contains("Terminal too small"));
     }
 
     #[test]

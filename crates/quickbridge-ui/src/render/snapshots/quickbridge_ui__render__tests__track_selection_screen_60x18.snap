@@ -1,0 +1,23 @@
+---
+source: crates/quickbridge-ui/src/render/mod.rs
+assertion_line: 790
+expression: contents
+---
+quickbridge 0.1.0                                           
+                                                            
+Select tracks                                               
+  Video                                                     
+  H.264 • Unknown resolution • SDR • default                
+✓ H.264 • Unknown resolution • SDR                          
+                                                            
+▸ Audio                                                     
+› Unknown language • AAC • default                          
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+↑↓ choose • Tab switch section • Enter play
