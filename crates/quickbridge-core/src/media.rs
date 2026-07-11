@@ -108,15 +108,45 @@ impl MediaInfo {
             let display_line = display_stream_line(&stream);
 
             match stream.codec_type.as_deref() {
-                Some("video") => videos.push(VideoStream {
-                    stream_index: stream.index,
-                    display_line,
-                    is_default: stream
+                Some("video")
+                    if !stream
                         .disposition
                         .as_ref()
-                        .and_then(FfprobeDisposition::is_default)
-                        .unwrap_or(false),
-                }),
+                        .and_then(FfprobeDisposition::is_attached_pic)
+                        .unwrap_or(false) =>
+                {
+                    videos.push(VideoStream {
+                        stream_index: stream.index,
+                        codec_name: stream.codec_name.clone(),
+                        profile: stream.profile.clone(),
+                        level: stream.level,
+                        codec_tag: stream.codec_tag_string.clone(),
+                        pixel_format: stream.pix_fmt.clone(),
+                        width: stream.width,
+                        height: stream.height,
+                        frame_rate: stream.r_frame_rate.clone(),
+                        bit_rate: stream
+                            .bit_rate
+                            .as_deref()
+                            .and_then(|value| value.parse().ok()),
+                        color_primaries: stream.color_primaries.clone(),
+                        color_transfer: stream.color_transfer.clone(),
+                        color_matrix: stream.color_space.clone(),
+                        dolby_vision: stream
+                            .side_data_list
+                            .iter()
+                            .find(|data| {
+                                data.side_data_type.as_deref() == Some("DOVI configuration record")
+                            })
+                            .and_then(FfprobeSideData::dolby_vision),
+                        display_line,
+                        is_default: stream
+                            .disposition
+                            .as_ref()
+                            .and_then(FfprobeDisposition::is_default)
+                            .unwrap_or(false),
+                    })
+                }
                 Some("audio") => audios.push(AudioStream {
                     stream_index: stream.index,
                     codec_name: stream.codec_name,
@@ -278,10 +308,75 @@ pub enum MediaInfoParseError {
     InvalidJson(#[from] serde_json::Error),
 }
 
+/// Apple-compatible packaging for a selected video stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VideoPackaging {
+    Avc,
+    Hevc { tag: &'static str, unofficial: bool },
+}
+
+/// Why a selected video stream cannot be safely packaged for Apple playback.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum VideoPackagingError {
+    #[error("video stream #{stream_index} is missing codec metadata")]
+    MissingCodec { stream_index: usize },
+    #[error("video stream #{stream_index} uses unsupported codec `{codec}`")]
+    UnsupportedCodec { stream_index: usize, codec: String },
+    #[error("video stream #{stream_index} uses unsupported Dolby Vision profile {profile}")]
+    UnsupportedDolbyVisionProfile { stream_index: usize, profile: u8 },
+    #[error(
+        "Dolby Vision Profile 8 stream #{stream_index} has unsupported compatibility ID {compatibility_id}"
+    )]
+    UnsupportedDolbyVisionCompatibility {
+        stream_index: usize,
+        compatibility_id: u8,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DolbyVisionConfig {
+    profile: u8,
+    level: u8,
+    base_layer_present: bool,
+    enhancement_layer_present: bool,
+    base_layer_signal_compatibility_id: u8,
+}
+
+impl DolbyVisionConfig {
+    pub fn profile(&self) -> u8 {
+        self.profile
+    }
+    pub fn level(&self) -> u8 {
+        self.level
+    }
+    pub fn base_layer_present(&self) -> bool {
+        self.base_layer_present
+    }
+    pub fn enhancement_layer_present(&self) -> bool {
+        self.enhancement_layer_present
+    }
+    pub fn base_layer_signal_compatibility_id(&self) -> u8 {
+        self.base_layer_signal_compatibility_id
+    }
+}
+
 /// Video stream metadata rendered in the UI.
 #[derive(Clone, Debug)]
 pub struct VideoStream {
     pub stream_index: usize,
+    codec_name: Option<String>,
+    profile: Option<String>,
+    level: Option<u32>,
+    codec_tag: Option<String>,
+    pixel_format: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_rate: Option<String>,
+    bit_rate: Option<u64>,
+    color_primaries: Option<String>,
+    color_transfer: Option<String>,
+    color_matrix: Option<String>,
+    dolby_vision: Option<DolbyVisionConfig>,
     display_line: String,
     is_default: bool,
 }
@@ -290,6 +385,19 @@ impl VideoStream {
     pub fn new(stream_index: usize, display_line: impl Into<String>, is_default: bool) -> Self {
         Self {
             stream_index,
+            codec_name: Some(String::from("h264")),
+            profile: None,
+            level: None,
+            codec_tag: None,
+            pixel_format: None,
+            width: None,
+            height: None,
+            frame_rate: None,
+            bit_rate: None,
+            color_primaries: None,
+            color_transfer: None,
+            color_matrix: None,
+            dolby_vision: None,
             display_line: display_line.into(),
             is_default,
         }
@@ -297,6 +405,85 @@ impl VideoStream {
 
     pub fn display_line(&self) -> &str {
         &self.display_line
+    }
+
+    pub fn codec_name(&self) -> Option<&str> {
+        self.codec_name.as_deref()
+    }
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
+    }
+    pub fn level(&self) -> Option<u32> {
+        self.level
+    }
+    pub fn codec_tag(&self) -> Option<&str> {
+        self.codec_tag.as_deref()
+    }
+    pub fn pixel_format(&self) -> Option<&str> {
+        self.pixel_format.as_deref()
+    }
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        self.width.zip(self.height)
+    }
+    pub fn frame_rate(&self) -> Option<&str> {
+        self.frame_rate.as_deref()
+    }
+    pub fn bit_rate(&self) -> Option<u64> {
+        self.bit_rate
+    }
+    pub fn color_primaries(&self) -> Option<&str> {
+        self.color_primaries.as_deref()
+    }
+    pub fn color_transfer(&self) -> Option<&str> {
+        self.color_transfer.as_deref()
+    }
+    pub fn color_matrix(&self) -> Option<&str> {
+        self.color_matrix.as_deref()
+    }
+    pub fn dolby_vision(&self) -> Option<&DolbyVisionConfig> {
+        self.dolby_vision.as_ref()
+    }
+
+    pub fn apple_packaging(&self) -> Result<VideoPackaging, VideoPackagingError> {
+        match self.codec_name.as_deref() {
+            Some("h264") => Ok(VideoPackaging::Avc),
+            Some("hevc") => match self.dolby_vision.as_ref() {
+                None => Ok(VideoPackaging::Hevc {
+                    tag: "hvc1",
+                    unofficial: false,
+                }),
+                Some(config) if config.profile == 5 => Ok(VideoPackaging::Hevc {
+                    tag: "dvh1",
+                    unofficial: true,
+                }),
+                Some(config)
+                    if config.profile == 8
+                        && matches!(config.base_layer_signal_compatibility_id, 1 | 4) =>
+                {
+                    Ok(VideoPackaging::Hevc {
+                        tag: "hvc1",
+                        unofficial: false,
+                    })
+                }
+                Some(config) if config.profile == 8 => {
+                    Err(VideoPackagingError::UnsupportedDolbyVisionCompatibility {
+                        stream_index: self.stream_index,
+                        compatibility_id: config.base_layer_signal_compatibility_id,
+                    })
+                }
+                Some(config) => Err(VideoPackagingError::UnsupportedDolbyVisionProfile {
+                    stream_index: self.stream_index,
+                    profile: config.profile,
+                }),
+            },
+            Some(codec) => Err(VideoPackagingError::UnsupportedCodec {
+                stream_index: self.stream_index,
+                codec: codec.to_string(),
+            }),
+            None => Err(VideoPackagingError::MissingCodec {
+                stream_index: self.stream_index,
+            }),
+        }
     }
 }
 
@@ -394,6 +581,10 @@ impl StreamSelection {
 
     pub fn audio_handling(&self) -> Option<&AudioHandling> {
         self.audio_handling.as_ref()
+    }
+
+    pub fn video_packaging(&self) -> Result<VideoPackaging, VideoPackagingError> {
+        self.video.apple_packaging()
     }
 
     pub fn render_output_file(&self) -> String {
@@ -623,11 +814,16 @@ struct FfprobeStream {
     codec_type: Option<String>,
     codec_name: Option<String>,
     profile: Option<String>,
+    level: Option<u32>,
+    codec_tag_string: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     pix_fmt: Option<String>,
     color_range: Option<String>,
     color_space: Option<String>,
+    color_primaries: Option<String>,
+    color_transfer: Option<String>,
+    r_frame_rate: Option<String>,
     field_order: Option<String>,
     sample_fmt: Option<String>,
     sample_rate: Option<String>,
@@ -636,6 +832,30 @@ struct FfprobeStream {
     bit_rate: Option<String>,
     disposition: Option<FfprobeDisposition>,
     tags: Option<FfprobeTags>,
+    #[serde(default)]
+    side_data_list: Vec<FfprobeSideData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeSideData {
+    side_data_type: Option<String>,
+    dv_profile: Option<u8>,
+    dv_level: Option<u8>,
+    bl_present_flag: Option<u8>,
+    el_present_flag: Option<u8>,
+    dv_bl_signal_compatibility_id: Option<u8>,
+}
+
+impl FfprobeSideData {
+    fn dolby_vision(&self) -> Option<DolbyVisionConfig> {
+        Some(DolbyVisionConfig {
+            profile: self.dv_profile?,
+            level: self.dv_level?,
+            base_layer_present: self.bl_present_flag? != 0,
+            enhancement_layer_present: self.el_present_flag? != 0,
+            base_layer_signal_compatibility_id: self.dv_bl_signal_compatibility_id?,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -651,11 +871,15 @@ struct FfprobeTags {
 #[derive(Debug, Deserialize)]
 struct FfprobeDisposition {
     default: Option<u8>,
+    attached_pic: Option<u8>,
 }
 
 impl FfprobeDisposition {
     fn is_default(&self) -> Option<bool> {
         self.default.map(|value| value != 0)
+    }
+    fn is_attached_pic(&self) -> Option<bool> {
+        self.attached_pic.map(|value| value != 0)
     }
 }
 
@@ -663,9 +887,97 @@ impl FfprobeDisposition {
 mod tests {
     use super::{
         AudioHandling, AudioStream, MediaInfo, SeekSupport, SourceInspection, SourceMetadata,
-        StreamSelection, TrackSelectionError, VideoStream,
+        StreamSelection, TrackSelectionError, VideoPackaging, VideoPackagingError, VideoStream,
     };
     use crate::Timecode;
+
+    #[test]
+    fn parses_video_capabilities_and_excludes_attached_art() {
+        let media =
+            MediaInfo::from_ffprobe_json(include_str!("../tests/fixtures/dv-p5-cover.json"))
+                .unwrap();
+        assert_eq!(media.videos().len(), 1);
+        let video = &media.videos()[0];
+        let dovi = video.dolby_vision().unwrap();
+        assert_eq!((dovi.profile(), dovi.level()), (5, 6));
+        assert!(dovi.base_layer_present());
+        assert!(!dovi.enhancement_layer_present());
+    }
+
+    #[test]
+    fn classifies_apple_video_packaging() {
+        let cases = [
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}"#,
+                Ok(VideoPackaging::Avc),
+            ),
+            (
+                include_str!("../tests/fixtures/hevc-bt709.json"),
+                Ok(VideoPackaging::Hevc {
+                    tag: "hvc1",
+                    unofficial: false,
+                }),
+            ),
+            (
+                include_str!("../tests/fixtures/hdr10-pq.json"),
+                Ok(VideoPackaging::Hevc {
+                    tag: "hvc1",
+                    unofficial: false,
+                }),
+            ),
+            (
+                include_str!("../tests/fixtures/dv-p5.json"),
+                Ok(VideoPackaging::Hevc {
+                    tag: "dvh1",
+                    unofficial: true,
+                }),
+            ),
+        ];
+        for (json, expected) in cases {
+            let video = MediaInfo::from_ffprobe_json(json)
+                .unwrap()
+                .videos()
+                .first()
+                .unwrap()
+                .clone();
+            assert_eq!(video.apple_packaging(), expected);
+        }
+
+        let rejected = [
+            (
+                "vc1",
+                None,
+                VideoPackagingError::UnsupportedCodec {
+                    stream_index: 0,
+                    codec: String::from("vc1"),
+                },
+            ),
+            (
+                "hevc",
+                Some((7, 0)),
+                VideoPackagingError::UnsupportedDolbyVisionProfile {
+                    stream_index: 0,
+                    profile: 7,
+                },
+            ),
+            (
+                "hevc",
+                Some((8, 2)),
+                VideoPackagingError::UnsupportedDolbyVisionCompatibility {
+                    stream_index: 0,
+                    compatibility_id: 2,
+                },
+            ),
+        ];
+        for (codec, dovi, expected) in rejected {
+            let side = dovi.map(|(profile, compatibility)| format!(r#", "side_data_list":[{{"side_data_type":"DOVI configuration record","dv_profile":{profile},"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":{compatibility}}}]"#)).unwrap_or_default();
+            let json = format!(
+                r#"{{"streams":[{{"index":0,"codec_type":"video","codec_name":"{codec}"{side}}}]}}"#
+            );
+            let media = MediaInfo::from_ffprobe_json(&json).unwrap();
+            assert_eq!(media.videos()[0].apple_packaging(), Err(expected));
+        }
+    }
 
     #[test]
     fn builds_default_selection_from_media_info() {

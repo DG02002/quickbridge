@@ -15,7 +15,8 @@ mod workflow;
 pub use command::{Command, CommandParseError, help_text, parse_command, resolve_target};
 pub use media::{
     AudioHandling, AudioStream, MediaInfo, MediaInfoParseError, SeekSupport, SourceInspection,
-    SourceMetadata, StreamSelection, TrackSelectionError, TrackSelectionRequest, VideoStream,
+    SourceMetadata, StreamSelection, TrackSelectionError, TrackSelectionRequest, VideoPackaging,
+    VideoPackagingError, VideoStream,
 };
 pub use playback::{
     PlaybackMode, PlaybackSnapshot, PlayerState, RunOutcome, StartOutcome, StreamTelemetry,

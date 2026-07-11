@@ -155,7 +155,9 @@ async fn prompt_for_source_url(
                         state.pop_input();
                     }
                     KeyCode::Enter => match submit_source_input(state) {
-                        SourcePromptResult::Ready(url) => return Ok(SourcePromptResult::Ready(url)),
+                        SourcePromptResult::Ready(url) => {
+                            return Ok(SourcePromptResult::Ready(url));
+                        }
                         SourcePromptResult::Completed => {
                             return Ok(SourcePromptResult::Completed);
                         }
@@ -165,9 +167,9 @@ async fn prompt_for_source_url(
                         SourcePromptResult::Continue => {}
                     },
                     KeyCode::Char(ch)
-                        if !key_event
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
+                        if !key_event.modifiers.intersects(
+                            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                        ) =>
                     {
                         state.push_input(ch);
                     }
@@ -366,8 +368,12 @@ fn submit_source_input(state: &mut AppState) -> SourcePromptResult {
     state.record_command(trimmed);
     match trimmed {
         "help" | "h" | "?" | "/help" => {
-            state.push_history_info("Run `/url https://example.com/video.mkv` to inspect and start a relay session.");
-            state.push_history_muted("You can also paste a full `http://` or `https://` media URL and press Enter.");
+            state.push_history_info(
+                "Run `/url https://example.com/video.mkv` to inspect and start a relay session.",
+            );
+            state.push_history_muted(
+                "You can also paste a full `http://` or `https://` media URL and press Enter.",
+            );
             SourcePromptResult::Continue
         }
         "quit" | "q" | "exit" => SourcePromptResult::Completed,
@@ -604,7 +610,12 @@ impl RunningState {
             );
         }
         if let Some(warning) = inspection.seek_warning() {
-            push_history_lines(&mut history, "!", &format_warning(warning), HistoryTone::Warning);
+            push_history_lines(
+                &mut history,
+                "!",
+                format_warning(warning),
+                HistoryTone::Warning,
+            );
         }
         if let Some(notice) = selection.audio_notice() {
             push_history_lines(&mut history, "·", notice, HistoryTone::Info);
@@ -650,9 +661,7 @@ impl RunningState {
             ),
             format!(
                 "Download speed     | {}",
-                format_bytes_per_second(
-                    self.snapshot.telemetry().download_bytes_per_second()
-                )
+                format_bytes_per_second(self.snapshot.telemetry().download_bytes_per_second())
             ),
             format!(
                 "Buffer ahead       | {}",
@@ -968,8 +977,12 @@ impl AppState {
 
     fn push_history(&mut self, prefix: &str, text: &str, tone: HistoryTone) {
         match &mut self.screen {
-            Screen::Launcher(launcher) => push_history_lines(&mut launcher.history, prefix, text, tone),
-            Screen::Running(running) => push_history_lines(&mut running.history, prefix, text, tone),
+            Screen::Launcher(launcher) => {
+                push_history_lines(&mut launcher.history, prefix, text, tone)
+            }
+            Screen::Running(running) => {
+                push_history_lines(&mut running.history, prefix, text, tone)
+            }
             _ => {}
         }
     }

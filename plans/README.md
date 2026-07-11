@@ -15,7 +15,7 @@ legacy `src/` tree.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |---|---|---|---|---|---|
-| 001 | Classify video capabilities and emit Apple-compatible tags | P1 | L | — | TODO |
+| 001 | Classify video capabilities and emit Apple-compatible tags | P1 | L | — | DONE |
 | 002 | Make the UHD HLS relay resilient and keyframe-aligned | P1 | M | 001 | TODO |
 | 003 | Stream HLS assets and remove duplicate hot-path filesystem work | P2 | M | 002 | TODO |
 | 004 | Establish a real-media HDR/DV performance regression gate | P1 | M | 001, 002, 003 | TODO |

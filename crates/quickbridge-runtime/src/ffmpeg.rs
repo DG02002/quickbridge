@@ -1,5 +1,5 @@
 use crate::{Result, RuntimeError, diagnostics::render_command, session::SessionPaths};
-use quickbridge_core::{AudioHandling, StreamSelection, Timecode};
+use quickbridge_core::{AudioHandling, StreamSelection, Timecode, VideoPackaging};
 use std::{ffi::OsString, path::Path, process::Stdio, time::Duration};
 use tokio::{
     fs,
@@ -72,7 +72,7 @@ impl FfmpegRunner {
         session: SessionPaths,
         selection: &StreamSelection,
     ) -> Result<FfmpegProcess> {
-        let args = build_args(source_url, start_at, &session, selection);
+        let args = build_args(source_url, start_at, &session, selection)?;
         let command_line = render_command(&self.binary, &args);
         debug!(
             session_id = session.id,
@@ -110,10 +110,10 @@ impl FfmpegRunner {
         session: &SessionPaths,
         selection: &StreamSelection,
     ) -> String {
-        render_command(
-            &self.binary,
-            &build_args(source_url, start_at, session, selection),
-        )
+        match build_args(source_url, start_at, session, selection) {
+            Ok(args) => render_command(&self.binary, &args),
+            Err(error) => format!("unable to build ffmpeg command: {error}"),
+        }
     }
 }
 
@@ -122,7 +122,8 @@ fn build_args(
     start_at: Timecode,
     session: &SessionPaths,
     selection: &StreamSelection,
-) -> Vec<OsString> {
+) -> Result<Vec<OsString>> {
+    let packaging = selection.video_packaging()?;
     let mut args = vec![OsString::from("-y"), OsString::from("-re")];
     if start_at.as_seconds() > 0 {
         args.push(OsString::from("-ss"));
@@ -143,6 +144,12 @@ fn build_args(
 
     args.extend([OsString::from("-sn"), OsString::from("-dn")]);
     args.extend([OsString::from("-c:v"), OsString::from("copy")]);
+    if let VideoPackaging::Hevc { tag, unofficial } = packaging {
+        args.extend([OsString::from("-tag:v"), OsString::from(tag)]);
+        if unofficial {
+            args.extend([OsString::from("-strict"), OsString::from("unofficial")]);
+        }
+    }
     args.push(OsString::from("-copyinkf"));
 
     match selection.audio_handling() {
@@ -173,7 +180,7 @@ fn build_args(
         session.playlist_path.as_os_str().to_os_string(),
     ]);
 
-    args
+    Ok(args)
 }
 
 #[derive(Debug)]
@@ -349,6 +356,7 @@ mod tests {
             &session,
             &selection,
         )
+        .unwrap()
         .into_iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
@@ -378,6 +386,77 @@ mod tests {
         assert_eq!(
             selection.audio_handling(),
             Some(&AudioHandling::TranscodeAlac)
+        );
+    }
+
+    #[test]
+    fn applies_apple_video_tags_and_rejects_unsupported_routes() {
+        let session = SessionPaths {
+            id: 1,
+            dir: std::path::PathBuf::from("/tmp/quickbridge/session-0001"),
+            playlist_path: std::path::PathBuf::from("/tmp/quickbridge/session-0001/stream.m3u8"),
+            segment_pattern: std::path::PathBuf::from(
+                "/tmp/quickbridge/session-0001/segment_%05d.m4s",
+            ),
+            init_filename: String::from("init.mp4"),
+        };
+        let cases = [
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}"#,
+                None,
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"hevc","color_transfer":"smpte2084"}]}"#,
+                Some("hvc1"),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"hevc","side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":0}]}]}"#,
+                Some("dvh1"),
+            ),
+        ];
+        for (json, tag) in cases {
+            let selection = quickbridge_core::MediaInfo::from_ffprobe_json(json)
+                .unwrap()
+                .default_selection()
+                .unwrap();
+            let args = build_args(
+                "https://example.com/video",
+                Timecode::ZERO,
+                &session,
+                &selection,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+            assert_eq!(
+                args.windows(2)
+                    .find(|pair| pair[0] == "-tag:v")
+                    .map(|pair| pair[1].as_str()),
+                tag
+            );
+            if tag == Some("dvh1") {
+                assert!(
+                    args.windows(2)
+                        .any(|pair| pair == ["-strict", "unofficial"])
+                );
+            }
+        }
+
+        let selection = quickbridge_core::MediaInfo::from_ffprobe_json(
+            r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"vc1"}]}"#,
+        )
+        .unwrap()
+        .default_selection()
+        .unwrap();
+        assert!(
+            build_args(
+                "https://example.com/video",
+                Timecode::ZERO,
+                &session,
+                &selection
+            )
+            .is_err()
         );
     }
 

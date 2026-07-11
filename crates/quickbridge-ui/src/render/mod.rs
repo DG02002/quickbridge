@@ -1,6 +1,6 @@
 use super::app::{
-    AppState, HistoryEntry, HistoryTone, LauncherState, ProgressModel, ProgressStatus, RunningState,
-    Screen, TrackSelectionState,
+    AppState, HistoryEntry, HistoryTone, LauncherState, ProgressModel, ProgressStatus,
+    RunningState, Screen, TrackSelectionState,
 };
 use crate::text::{format_bytes, format_bytes_per_second, format_playback_time};
 use quickbridge_core::{JumpStep, LaunchStep, PlayerState, PrepareStep};
@@ -41,12 +41,9 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &AppState) {
 
     let lines = match &state.screen {
         Screen::Launcher(launcher) => launcher_lines(state, launcher, width),
-        Screen::Inspecting { progress } => progress_screen_lines(
-            "Inspect source",
-            None,
-            progress,
-            prepare_label,
-        ),
+        Screen::Inspecting { progress } => {
+            progress_screen_lines("Inspect source", None, progress, prepare_label)
+        }
         Screen::Starting {
             selection_title,
             progress,
@@ -172,7 +169,10 @@ fn track_selection_lines(state: &AppState, selection: &TrackSelectionState) -> V
     }
     lines.push(Line::styled("Audio".to_string(), label_style()));
     if selection.request.audios().is_empty() {
-        lines.push(Line::styled("No audio track available".to_string(), detail_style()));
+        lines.push(Line::styled(
+            "No audio track available".to_string(),
+            detail_style(),
+        ));
     } else {
         lines.extend(
             selection
@@ -186,7 +186,10 @@ fn track_selection_lines(state: &AppState, selection: &TrackSelectionState) -> V
         );
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("Arrow keys move • Enter confirm".to_string(), detail_style()));
+    lines.push(Line::styled(
+        "Arrow keys move • Enter confirm".to_string(),
+        detail_style(),
+    ));
     lines
 }
 
@@ -298,7 +301,10 @@ fn bottom_scroll_offset(lines: &[Line<'static>], width: usize, viewport_height: 
 
 fn visual_line_count(lines: &[Line<'static>], width: usize) -> usize {
     let width = width.max(1);
-    lines.iter().map(|line| visual_line_height(line, width)).sum()
+    lines
+        .iter()
+        .map(|line| visual_line_height(line, width))
+        .sum()
 }
 
 fn visual_line_height(line: &Line<'static>, width: usize) -> usize {
@@ -423,7 +429,10 @@ fn jump_label(step: JumpStep, _status: ProgressStatus) -> &'static str {
 }
 
 fn playback_status_line(running: &RunningState) -> Line<'static> {
-    let mut current_time = format_playback_time(running.snapshot.current_time(), running.media_info.duration());
+    let mut current_time = format_playback_time(
+        running.snapshot.current_time(),
+        running.media_info.duration(),
+    );
     if matches!(running.snapshot.player_state(), PlayerState::Paused) {
         current_time.push_str(" (Paused)");
     }
@@ -586,7 +595,9 @@ mod tests {
                 input: String::new(),
                 history: vec![HistoryEntry {
                     prefix: String::from("·"),
-                    text: String::from("Paste a media URL or run `/url https://example.com/video.mkv` to start."),
+                    text: String::from(
+                        "Paste a media URL or run `/url https://example.com/video.mkv` to start.",
+                    ),
                     tone: HistoryTone::Info,
                 }],
             }),
@@ -673,11 +684,7 @@ mod tests {
                 Timecode::ZERO,
                 Timecode::from_seconds(12),
                 PlayerState::Playing,
-                StreamTelemetry::new(
-                    3 * 1024 * 1024,
-                    12 * 1024 * 1024,
-                    Timecode::from_seconds(6),
-                ),
+                StreamTelemetry::new(3 * 1024 * 1024, 12 * 1024 * 1024, Timecode::from_seconds(6)),
             ),
             StartupContext {
                 requested_start_at: Timecode::ZERO,
@@ -774,11 +781,7 @@ mod tests {
                 Timecode::ZERO,
                 Timecode::from_seconds(12),
                 PlayerState::WindowClosed,
-                StreamTelemetry::new(
-                    3 * 1024 * 1024,
-                    12 * 1024 * 1024,
-                    Timecode::from_seconds(6),
-                ),
+                StreamTelemetry::new(3 * 1024 * 1024, 12 * 1024 * 1024, Timecode::from_seconds(6)),
             ),
             StartupContext {
                 requested_start_at: Timecode::ZERO,

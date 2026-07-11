@@ -557,7 +557,11 @@ impl TelemetryTracker {
                 } else if metadata.is_file() {
                     let size = metadata.len();
                     let previous = self.observed_sizes.get(&path).copied().unwrap_or(0);
-                    let written_now = if size >= previous { size - previous } else { size };
+                    let written_now = if size >= previous {
+                        size - previous
+                    } else {
+                        size
+                    };
                     self.cumulative_bytes_written =
                         self.cumulative_bytes_written.saturating_add(written_now);
                     current_sizes.insert(path, size);

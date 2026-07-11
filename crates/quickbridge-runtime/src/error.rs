@@ -1,4 +1,4 @@
-use quickbridge_core::{MediaInfoParseError, SessionStateError};
+use quickbridge_core::{MediaInfoParseError, SessionStateError, VideoPackagingError};
 use std::{path::PathBuf, process::ExitStatus};
 use thiserror::Error;
 
@@ -83,6 +83,8 @@ pub enum RuntimeError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     MediaInfoParse(#[from] MediaInfoParseError),
+    #[error(transparent)]
+    VideoPackaging(#[from] VideoPackagingError),
     #[error(transparent)]
     SessionState(#[from] SessionStateError),
 }
