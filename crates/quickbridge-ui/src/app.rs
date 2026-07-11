@@ -32,7 +32,7 @@ pub async fn run_interactive(
     let mut runtime = TuiRuntime::enter(runtime_options)?;
     let mut state = AppState::new(cli.url.clone());
     runtime.draw(&state)?;
-    let source_url = match cli.url {
+    let mut source_url = match cli.url.clone() {
         Some(url) => url,
         None => match prompt_for_source_url(&mut runtime, &mut state).await? {
             SourcePromptResult::Ready(url) => url,
@@ -41,28 +41,45 @@ pub async fn run_interactive(
             SourcePromptResult::Continue => unreachable!("source prompt loops until completion"),
         },
     };
-    state.begin_prepare(source_url.clone());
-    runtime.draw(&state)?;
-
-    let prepared = {
-        let mut sink = PrepareProgressRenderer {
-            runtime: &mut runtime,
-            state: &mut state,
-            verbose: cli.verbose,
+    let prepared = loop {
+        state.begin_prepare(source_url.clone());
+        runtime.draw(&state)?;
+        let attempt = {
+            let mut sink = PrepareProgressRenderer {
+                runtime: &mut runtime,
+                state: &mut state,
+                verbose: cli.verbose,
+            };
+            prepare_source(
+                PrepareRequest {
+                    source_url: source_url.clone(),
+                    simulation: cli.simulation.clone(),
+                    probe: probe.clone(),
+                },
+                &mut sink,
+            )
+            .await
         };
-        match prepare_source(
-            PrepareRequest {
-                source_url: source_url.clone(),
-                simulation: cli.simulation.clone(),
-                probe,
+        match attempt {
+            Ok(prepared) => match prepared.media_info().selection_request() {
+                Ok(_) => break prepared,
+                Err(quickbridge_core::TrackSelectionError::NoVideoTrack) => {
+                    state.show_source_error(SourceErrorState::no_video(source_url.clone()));
+                }
+                Err(error) => return Err(UiError::from(error)),
             },
-            &mut sink,
-        )
-        .await
-        {
-            Ok(prepared) => prepared,
             Err(RuntimeError::Interrupted) => return Ok(RunOutcome::Interrupted),
+            Err(error) if is_recoverable_prepare_error(&error) => {
+                state.show_source_error(SourceErrorState::from_runtime(source_url.clone(), &error));
+            }
             Err(error) => return Err(UiError::from(error)),
+        }
+
+        match recover_source(&mut runtime, &mut state).await? {
+            SourceRecoveryAction::Retry => {}
+            SourceRecoveryAction::Edit(edited) => source_url = edited,
+            SourceRecoveryAction::Quit => return Ok(RunOutcome::Completed),
+            SourceRecoveryAction::Interrupted => return Ok(RunOutcome::Interrupted),
         }
     };
 
@@ -187,6 +204,59 @@ async fn prompt_for_source_url(
             AppEvent::Key(_) => {}
         }
     }
+}
+
+async fn recover_source(
+    runtime: &mut TuiRuntime,
+    state: &mut AppState,
+) -> Result<SourceRecoveryAction> {
+    runtime.draw(state)?;
+    let mut events = AppEventStream::new(Duration::from_millis(100));
+    loop {
+        match events.next().await? {
+            AppEvent::CtrlC => return Ok(SourceRecoveryAction::Interrupted),
+            AppEvent::Resize | AppEvent::Tick => runtime.draw(state)?,
+            AppEvent::Paste(text) => state.append_input(&text),
+            AppEvent::Key(key) if should_handle_key(key) => {
+                let editing = matches!(&state.screen, Screen::SourceError(error) if error.editing);
+                match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(SourceRecoveryAction::Interrupted);
+                    }
+                    KeyCode::Char('r') if !editing => return Ok(SourceRecoveryAction::Retry),
+                    KeyCode::Char('q') if !editing => return Ok(SourceRecoveryAction::Quit),
+                    KeyCode::Char('e') if !editing => state.edit_source_error_url(),
+                    KeyCode::Backspace if editing => state.pop_input(),
+                    KeyCode::Enter if editing => {
+                        return Ok(SourceRecoveryAction::Edit(state.take_input()));
+                    }
+                    KeyCode::Esc if editing => state.cancel_source_error_edit(),
+                    KeyCode::Char(ch)
+                        if editing
+                            && !key.modifiers.intersects(
+                                KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                            ) =>
+                    {
+                        state.push_input(ch);
+                    }
+                    _ => {}
+                }
+                runtime.draw(state)?;
+            }
+            AppEvent::Key(_) => {}
+        }
+    }
+}
+
+fn is_recoverable_prepare_error(error: &RuntimeError) -> bool {
+    matches!(
+        error,
+        RuntimeError::InvalidSourceUrl { .. }
+            | RuntimeError::FfprobeUnavailable { .. }
+            | RuntimeError::ExecuteBinary { .. }
+            | RuntimeError::FfprobeFailed { .. }
+            | RuntimeError::MediaInfoParse(_)
+    )
 }
 
 async fn choose_tracks(
@@ -329,11 +399,18 @@ async fn submit_input(
         PromptCommand::Help => {
             state.show_details(help_text());
         }
-        PromptCommand::Reopen => {
-            playback.reopen_player().await?;
-            state.update_snapshot(playback.snapshot(Instant::now()).await);
-            state.push_history_info("Opened the current stream in QuickTime Player again.");
-        }
+        PromptCommand::Reopen => match playback.reopen_player().await {
+            Ok(()) => {
+                state.update_snapshot(playback.snapshot(Instant::now()).await);
+                state.set_player_action_error(None);
+                state.push_history_info("Opened the current stream in QuickTime Player again.");
+            }
+            Err(error) => {
+                state.set_player_action_error(Some(format!(
+                    "Couldn't reopen QuickTime Player: {error}. Type `reopen` to retry."
+                )));
+            }
+        },
         PromptCommand::Status => {
             let snapshot = playback.snapshot(Instant::now()).await;
             state.update_snapshot(snapshot);
@@ -434,6 +511,14 @@ enum SourcePromptResult {
     Continue,
     Ready(String),
     Completed,
+    Interrupted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SourceRecoveryAction {
+    Retry,
+    Edit(String),
+    Quit,
     Interrupted,
 }
 
@@ -554,6 +639,45 @@ pub(crate) struct LauncherState {
     pub(crate) history: Vec<HistoryEntry>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SourceErrorState {
+    pub(crate) attempted_url: String,
+    pub(crate) summary: String,
+    pub(crate) diagnostic: String,
+    pub(crate) input: String,
+    pub(crate) editing: bool,
+}
+
+impl SourceErrorState {
+    fn from_runtime(attempted_url: String, error: &RuntimeError) -> Self {
+        let summary = match error {
+            RuntimeError::InvalidSourceUrl { .. } => "That source URL isn't valid.",
+            RuntimeError::FfprobeUnavailable { .. } => "ffprobe isn't available.",
+            RuntimeError::ExecuteBinary { .. } => "Couldn't start ffprobe.",
+            RuntimeError::FfprobeFailed { .. } => "ffprobe couldn't inspect this source.",
+            RuntimeError::MediaInfoParse(_) => "ffprobe returned malformed source details.",
+            _ => "Couldn't inspect this source.",
+        };
+        Self {
+            input: attempted_url.clone(),
+            attempted_url,
+            summary: summary.to_string(),
+            diagnostic: error.to_string(),
+            editing: false,
+        }
+    }
+
+    fn no_video(attempted_url: String) -> Self {
+        Self {
+            input: attempted_url.clone(),
+            attempted_url,
+            summary: String::from("This source doesn't contain a supported video track."),
+            diagnostic: String::from("the source does not contain a supported video track"),
+            editing: false,
+        }
+    }
+}
+
 impl LauncherState {
     fn new() -> Self {
         let mut history = Vec::new();
@@ -591,6 +715,7 @@ pub(crate) struct RunningState {
     pub(crate) history: Vec<HistoryEntry>,
     pub(crate) details: Option<String>,
     pub(crate) activity_scroll: usize,
+    pub(crate) player_action_error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -651,6 +776,7 @@ impl RunningState {
             history,
             details: None,
             activity_scroll: 0,
+            player_action_error: None,
         }
     }
 
@@ -744,6 +870,7 @@ pub(crate) enum Screen {
         prepare_history: Vec<HistoryEntry>,
     },
     Running(Box<RunningState>),
+    SourceError(SourceErrorState),
 }
 
 #[derive(Clone, Debug)]
@@ -827,9 +954,32 @@ impl AppState {
         self.screen = Screen::Running(Box::new(running));
     }
 
+    fn show_source_error(&mut self, error: SourceErrorState) {
+        self.screen = Screen::SourceError(error);
+    }
+
+    fn edit_source_error_url(&mut self) {
+        if let Screen::SourceError(error) = &mut self.screen {
+            error.editing = true;
+        }
+    }
+
+    fn cancel_source_error_edit(&mut self) {
+        if let Screen::SourceError(error) = &mut self.screen {
+            error.input.clone_from(&error.attempted_url);
+            error.editing = false;
+        }
+    }
+
     fn update_snapshot(&mut self, snapshot: PlaybackSnapshot) {
         if let Screen::Running(running) = &mut self.screen {
             running.snapshot = snapshot;
+        }
+    }
+
+    fn set_player_action_error(&mut self, message: Option<String>) {
+        if let Screen::Running(running) = &mut self.screen {
+            running.player_action_error = message;
         }
     }
 
@@ -844,6 +994,7 @@ impl AppState {
         match &mut self.screen {
             Screen::Launcher(launcher) => launcher.input.push(ch),
             Screen::Running(running) => running.input.push(ch),
+            Screen::SourceError(error) if error.editing => error.input.push(ch),
             _ => {}
         }
     }
@@ -852,6 +1003,7 @@ impl AppState {
         match &mut self.screen {
             Screen::Launcher(launcher) => launcher.input.push_str(text),
             Screen::Running(running) => running.input.push_str(text),
+            Screen::SourceError(error) if error.editing => error.input.push_str(text),
             _ => {}
         }
     }
@@ -864,6 +1016,9 @@ impl AppState {
             Screen::Running(running) => {
                 running.input.pop();
             }
+            Screen::SourceError(error) if error.editing => {
+                error.input.pop();
+            }
             _ => {}
         }
     }
@@ -872,6 +1027,7 @@ impl AppState {
         match &mut self.screen {
             Screen::Launcher(launcher) => std::mem::take(&mut launcher.input),
             Screen::Running(running) => std::mem::take(&mut running.input),
+            Screen::SourceError(error) if error.editing => std::mem::take(&mut error.input),
             _ => String::new(),
         }
     }
@@ -902,6 +1058,7 @@ impl AppState {
                 }
             }
             Screen::TrackSelection(_) => {}
+            Screen::SourceError(_) => {}
         }
     }
 
@@ -1312,12 +1469,14 @@ fn poll_for_interrupt() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppState, RunningState, Screen, SelectionFocus, StartupContext, TrackSelectionState,
+        AppState, RunningState, Screen, SelectionFocus, SourceErrorState, StartupContext,
+        TrackSelectionState, is_recoverable_prepare_error,
     };
     use quickbridge_core::{
         AudioStream, MediaInfo, PlaybackMode, PlaybackSnapshot, PlayerState, SeekSupport,
         SourceInspection, SourceMetadata, StreamSelection, StreamTelemetry, Timecode, VideoStream,
     };
+    use quickbridge_runtime::RuntimeError;
 
     fn running_state() -> AppState {
         let running = RunningState::new(
@@ -1420,5 +1579,38 @@ mod tests {
         };
         assert!(running.details.is_none());
         assert_eq!(running.history.len(), initial_len);
+    }
+
+    #[test]
+    fn prepare_error_states_use_typed_actionable_summaries() {
+        let cases = [
+            (
+                RuntimeError::InvalidSourceUrl {
+                    source_url: String::from("bad"),
+                },
+                "That source URL isn't valid.",
+            ),
+            (
+                RuntimeError::FfprobeUnavailable {
+                    binary: String::from("custom-ffprobe"),
+                },
+                "ffprobe isn't available.",
+            ),
+            (
+                RuntimeError::FfprobeFailed {
+                    stderr: String::from("denied"),
+                },
+                "ffprobe couldn't inspect this source.",
+            ),
+        ];
+        for (error, summary) in cases {
+            assert!(is_recoverable_prepare_error(&error));
+            let state = SourceErrorState::from_runtime(String::from("source"), &error);
+            assert_eq!(state.summary, summary);
+            assert!(!state.diagnostic.is_empty());
+        }
+
+        let no_video = SourceErrorState::no_video(String::from("source"));
+        assert!(no_video.summary.contains("supported video track"));
     }
 }

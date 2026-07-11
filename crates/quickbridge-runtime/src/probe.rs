@@ -4,7 +4,7 @@ use std::{ffi::OsString, process::Stdio};
 use tokio::process::Command;
 use tracing::debug;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ProbeRunner {
     binary: OsString,
 }
@@ -167,6 +167,40 @@ exit 1
             lines[1],
             "-v error -show_streams -show_format -of json https://example.com/video.mkv"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cloned_runner_preserves_fail_once_probe_configuration() {
+        let marker = std::env::temp_dir().join(format!(
+            "quickbridge-fake-ffprobe-marker-{}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            SCRIPT_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let script = write_script(&format!(
+            r#"#!/bin/sh
+set -eu
+if [ "${{1:-}}" = "-version" ]; then exit 0; fi
+if [ ! -f "{}" ]; then touch "{}"; echo 'temporary failure' >&2; exit 1; fi
+echo '{{"streams":[{{"index":0,"codec_type":"video","codec_name":"h264"}}]}}'
+"#,
+            marker.display(),
+            marker.display()
+        ));
+        let runner = ProbeRunner::with_binary(&script);
+
+        assert!(
+            runner
+                .clone()
+                .probe("https://example.com/video.mkv")
+                .await
+                .is_err()
+        );
+        let media = runner.probe("https://example.com/video.mkv").await.unwrap();
+        assert_eq!(media.videos().len(), 1);
     }
 
     #[cfg(unix)]

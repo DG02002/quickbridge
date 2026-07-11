@@ -1,6 +1,6 @@
 use super::app::{
     AppState, HistoryEntry, HistoryTone, LauncherState, ProgressModel, ProgressStatus,
-    RunningState, Screen, TrackSelectionState,
+    RunningState, Screen, SourceErrorState, TrackSelectionState,
 };
 use crate::text::{format_bytes, format_bytes_per_second, format_playback_time};
 use quickbridge_core::{AudioStream, JumpStep, LaunchStep, PlayerState, PrepareStep, VideoStream};
@@ -55,12 +55,49 @@ pub(crate) fn render(frame: &mut Frame<'_>, state: &AppState, full_screen: bool)
         ),
         Screen::Running(_) => unreachable!("handled above"),
         Screen::TrackSelection(_) => unreachable!("handled above"),
+        Screen::SourceError(error) => source_error_lines(state, error, width),
     };
 
     frame.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }),
         frame.area(),
     );
+}
+
+fn source_error_lines(
+    state: &AppState,
+    error: &SourceErrorState,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::styled(state.version.clone(), version_style()),
+        Line::raw(""),
+        section_title("Couldn't prepare source"),
+        Line::styled(format!("! {}", error.summary), warning_style()),
+        Line::raw(""),
+        Line::styled("Source", label_style()),
+        Line::styled(error.attempted_url.clone(), text_style()),
+        Line::raw(""),
+    ];
+    if error.editing {
+        lines.push(section_title("Edit URL"));
+        lines.extend(input_lines(
+            &error.input,
+            "https://example.com/video.mkv",
+            "Enter retry edited URL • Esc cancel",
+            width,
+        ));
+    } else {
+        lines.push(section_title("Choose an action"));
+        lines.push(Line::styled(
+            "R Retry • E Edit URL • Q Quit",
+            accent_style(),
+        ));
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("Details", label_style()));
+        lines.push(Line::styled(error.diagnostic.clone(), detail_style()));
+    }
+    lines
 }
 
 fn launcher_lines(state: &AppState, launcher: &LauncherState, width: usize) -> Vec<Line<'static>> {
@@ -694,6 +731,9 @@ fn jump_label(step: JumpStep, _status: ProgressStatus) -> &'static str {
 }
 
 fn live_warning_line(running: &RunningState) -> Option<String> {
+    if let Some(error) = &running.player_action_error {
+        return Some(format!("[WARN] {error}"));
+    }
     match running.snapshot.player_state() {
         PlayerState::WindowClosed => Some(String::from(
             "[WARN] QuickTime Player window is closed. Type `reopen` to open the stream again.",
@@ -782,7 +822,7 @@ mod tests {
     use crate::{
         app::{
             AppState, HistoryEntry, HistoryTone, LauncherState, ProgressModel, RunningState,
-            Screen, SelectionFocus, StartupContext, TrackSelectionState,
+            Screen, SelectionFocus, SourceErrorState, StartupContext, TrackSelectionState,
         },
         test_backend::VT100Backend,
     };
@@ -842,6 +882,31 @@ mod tests {
         let contents = render_contents(&state);
         assert!(contents.contains("/url https://example.com/video.mkv"));
         assert!(contents.contains("Input"));
+    }
+
+    #[test]
+    fn source_error_screen_renders_recovery_actions_at_supported_sizes() {
+        let state = AppState {
+            version: String::from("quickbridge 0.1.0"),
+            source_url: String::from("https://example.com/broken.mkv"),
+            prepare_history: Vec::new(),
+            screen: Screen::SourceError(SourceErrorState {
+                attempted_url: String::from("https://example.com/broken.mkv"),
+                summary: String::from("ffprobe couldn't inspect this source."),
+                diagnostic: String::from("unable to inspect the source with ffprobe: denied"),
+                input: String::from("https://example.com/broken.mkv"),
+                editing: false,
+            }),
+        };
+
+        for (width, height) in [(80, 24), (60, 18)] {
+            let contents = render_contents_with_size(&state, width, height);
+            assert!(contents.contains("Couldn't prepare source"));
+            assert!(contents.contains("ffprobe couldn't inspect this source"));
+            assert!(contents.contains("R Retry • E Edit URL • Q Quit"));
+            assert!(contents.contains("https://example.com/broken.mkv"));
+            assert_snapshot!(format!("source_error_screen_{width}x{height}"), contents);
+        }
     }
 
     #[test]
