@@ -1,0 +1,12 @@
+---
+source: crates/quickbridge-ui/src/render/mod.rs
+assertion_line: 476
+expression: contents
+---
+quickbridge 0.1.0                                                                                                       
+                                                                                                                        
+Inspect source                                                                                                          
+✓ Checked source URL                                                                                                    
+⠋ Checking whether time jumps are available                                                                             
+○ Read source details                                                                                                   
+○ Found video and audio tracks

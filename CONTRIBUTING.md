@@ -10,16 +10,16 @@
 Install the standard Rust components once:
 
 ```console
-$ rustup component add rustfmt clippy rust-analyzer
+rustup component add rustfmt clippy rust-analyzer
 ```
 
 Cargo aliases are configured in [`.cargo/config.toml`](./.cargo/config.toml):
 
 ```console
-$ cargo check-all
-$ cargo fmt-check
-$ cargo lint
-$ cargo xtest
+cargo check-all
+cargo fmt-check
+cargo lint
+cargo xtest
 ```
 
 ## Development workflow
@@ -27,12 +27,12 @@ $ cargo xtest
 Run the full local verification flow before committing:
 
 ```console
-$ cargo fmt --all
-$ cargo check-all
-$ cargo lint
-$ cargo xtest
-$ cargo package --allow-dirty
-$ cargo publish --dry-run
+cargo fmt --all
+cargo check-all
+cargo lint
+cargo xtest
+cargo package --allow-dirty
+cargo publish --dry-run
 ```
 
 `cargo` aliases can only wrap a single Cargo command, so the project keeps the
@@ -43,25 +43,25 @@ full verification flow as a short sequence instead of adding a custom task runne
 Run the CLI with a source URL:
 
 ```console
-$ cargo run -- "https://example.com/video.mkv"
+cargo run -- "https://example.com/video.mkv"
 ```
 
 Start from a timestamp and a fixed port:
 
 ```console
-$ cargo run -- --at 01:23:45 --port 50505 "https://example.com/video.mkv"
+cargo run -- --at 01:23:45 --port 50505 "https://example.com/video.mkv"
 ```
 
 Build a development binary:
 
 ```console
-$ cargo build
+cargo build
 ```
 
 Build an optimized release binary:
 
 ```console
-$ cargo build --release
+cargo build --release
 ```
 
 ## Test notes

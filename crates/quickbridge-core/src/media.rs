@@ -1,0 +1,757 @@
+use crate::Timecode;
+use serde::Deserialize;
+use thiserror::Error;
+
+/// Metadata discovered about the media source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceMetadata {
+    filename: String,
+    size_bytes: Option<u64>,
+}
+
+impl SourceMetadata {
+    pub fn new(filename: impl Into<String>, size_bytes: Option<u64>) -> Self {
+        Self {
+            filename: filename.into(),
+            size_bytes,
+        }
+    }
+
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    pub fn display_size(&self) -> String {
+        self.size_bytes
+            .map(format_bytes)
+            .unwrap_or_else(|| String::from("Unknown"))
+    }
+}
+
+/// Whether the source supports seeking via HTTP range requests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SeekSupport {
+    Enabled,
+    Disabled { warning: String },
+}
+
+/// Inspection result for the input source URL.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceInspection {
+    metadata: SourceMetadata,
+    seek_support: SeekSupport,
+}
+
+impl SourceInspection {
+    pub fn new(metadata: SourceMetadata, seek_support: SeekSupport) -> Self {
+        Self {
+            metadata,
+            seek_support,
+        }
+    }
+
+    pub fn metadata(&self) -> &SourceMetadata {
+        &self.metadata
+    }
+
+    pub fn seek_support(&self) -> &SeekSupport {
+        &self.seek_support
+    }
+
+    pub fn seeking_enabled(&self) -> bool {
+        matches!(self.seek_support, SeekSupport::Enabled)
+    }
+
+    pub fn seek_warning(&self) -> Option<&str> {
+        match &self.seek_support {
+            SeekSupport::Enabled => None,
+            SeekSupport::Disabled { warning } => Some(warning.as_str()),
+        }
+    }
+}
+
+/// Parsed ffprobe metadata for the input source.
+#[derive(Clone, Debug)]
+pub struct MediaInfo {
+    videos: Vec<VideoStream>,
+    audios: Vec<AudioStream>,
+    duration: Option<Timecode>,
+}
+
+impl MediaInfo {
+    pub fn new(
+        videos: Vec<VideoStream>,
+        audios: Vec<AudioStream>,
+        duration: Option<Timecode>,
+    ) -> Self {
+        Self {
+            videos,
+            audios,
+            duration,
+        }
+    }
+
+    pub fn duration(&self) -> Option<Timecode> {
+        self.duration
+    }
+
+    pub fn from_ffprobe_json(json: &str) -> Result<Self, MediaInfoParseError> {
+        let parsed: FfprobeOutput = serde_json::from_str(json)?;
+
+        let mut videos = Vec::new();
+        let mut audios = Vec::new();
+        for stream in parsed.streams {
+            let display_line = display_stream_line(&stream);
+
+            match stream.codec_type.as_deref() {
+                Some("video") => videos.push(VideoStream {
+                    stream_index: stream.index,
+                    display_line,
+                    is_default: stream
+                        .disposition
+                        .as_ref()
+                        .and_then(FfprobeDisposition::is_default)
+                        .unwrap_or(false),
+                }),
+                Some("audio") => audios.push(AudioStream {
+                    stream_index: stream.index,
+                    codec_name: stream.codec_name,
+                    display_line,
+                    is_default: stream
+                        .disposition
+                        .as_ref()
+                        .and_then(FfprobeDisposition::is_default)
+                        .unwrap_or(false),
+                }),
+                Some("subtitle") => {}
+                _ => {}
+            }
+        }
+
+        videos.sort_by_key(|stream| stream.stream_index);
+        audios.sort_by_key(|stream| stream.stream_index);
+
+        let duration = parsed
+            .format
+            .as_ref()
+            .and_then(|format| format.duration.as_deref())
+            .and_then(|value| value.parse::<f64>().ok())
+            .and_then(Timecode::from_seconds_f64);
+
+        Ok(Self {
+            videos,
+            audios,
+            duration,
+        })
+    }
+
+    pub fn videos(&self) -> &[VideoStream] {
+        &self.videos
+    }
+
+    pub fn audios(&self) -> &[AudioStream] {
+        &self.audios
+    }
+
+    pub fn render_input_file(&self) -> String {
+        let mut lines = Vec::new();
+
+        if !self.videos.is_empty() {
+            lines.push(String::from("  Video"));
+            lines.extend(
+                self.videos
+                    .iter()
+                    .map(|stream| format!("    {}", stream.display_line())),
+            );
+        }
+
+        if !self.audios.is_empty() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push(String::from("  Audio"));
+            lines.extend(
+                self.audios
+                    .iter()
+                    .map(|stream| format!("    {}", stream.display_line())),
+            );
+        }
+
+        if lines.is_empty() {
+            String::from("  No supported tracks found")
+        } else {
+            lines.join("\n")
+        }
+    }
+
+    pub fn selection_request(&self) -> Result<TrackSelectionRequest, TrackSelectionError> {
+        if self.videos.is_empty() {
+            return Err(TrackSelectionError::NoVideoTrack);
+        }
+
+        Ok(TrackSelectionRequest {
+            videos: self.videos.clone(),
+            audios: self.audios.clone(),
+            default_video_index: default_index(&self.videos),
+            default_audio_index: (!self.audios.is_empty()).then(|| default_index(&self.audios)),
+        })
+    }
+
+    pub fn default_selection(&self) -> Result<StreamSelection, TrackSelectionError> {
+        let request = self.selection_request()?;
+        request.build_selection(request.default_video_index, request.default_audio_index)
+    }
+}
+
+/// Prompt model used by the UI when selecting tracks.
+#[derive(Clone, Debug)]
+pub struct TrackSelectionRequest {
+    videos: Vec<VideoStream>,
+    audios: Vec<AudioStream>,
+    default_video_index: usize,
+    default_audio_index: Option<usize>,
+}
+
+impl TrackSelectionRequest {
+    pub fn videos(&self) -> &[VideoStream] {
+        &self.videos
+    }
+
+    pub fn audios(&self) -> &[AudioStream] {
+        &self.audios
+    }
+
+    pub fn default_video_index(&self) -> usize {
+        self.default_video_index
+    }
+
+    pub fn default_audio_index(&self) -> Option<usize> {
+        self.default_audio_index
+    }
+
+    pub fn build_selection(
+        &self,
+        video_index: usize,
+        audio_index: Option<usize>,
+    ) -> Result<StreamSelection, TrackSelectionError> {
+        let video = self
+            .videos
+            .get(video_index)
+            .cloned()
+            .ok_or(TrackSelectionError::VideoIndexOutOfRange { index: video_index })?;
+        let audio = match (self.audios.is_empty(), audio_index) {
+            (true, _) => None,
+            (false, Some(index)) => Some(
+                self.audios
+                    .get(index)
+                    .cloned()
+                    .ok_or(TrackSelectionError::AudioIndexOutOfRange { index })?,
+            ),
+            (false, None) => return Err(TrackSelectionError::AudioSelectionRequired),
+        };
+
+        Ok(StreamSelection::new(video, audio))
+    }
+}
+
+/// Errors produced when choosing audio and video tracks.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum TrackSelectionError {
+    #[error("the source does not contain a supported video track")]
+    NoVideoTrack,
+    #[error("video selection index {index} is out of range")]
+    VideoIndexOutOfRange { index: usize },
+    #[error("audio selection index {index} is out of range")]
+    AudioIndexOutOfRange { index: usize },
+    #[error("an audio track selection is required")]
+    AudioSelectionRequired,
+}
+
+/// Errors returned while parsing ffprobe JSON output.
+#[derive(Debug, Error)]
+pub enum MediaInfoParseError {
+    #[error("unable to read ffprobe output")]
+    InvalidJson(#[from] serde_json::Error),
+}
+
+/// Video stream metadata rendered in the UI.
+#[derive(Clone, Debug)]
+pub struct VideoStream {
+    pub stream_index: usize,
+    display_line: String,
+    is_default: bool,
+}
+
+impl VideoStream {
+    pub fn new(stream_index: usize, display_line: impl Into<String>, is_default: bool) -> Self {
+        Self {
+            stream_index,
+            display_line: display_line.into(),
+            is_default,
+        }
+    }
+
+    pub fn display_line(&self) -> &str {
+        &self.display_line
+    }
+}
+
+/// Audio stream metadata rendered in the UI.
+#[derive(Clone, Debug)]
+pub struct AudioStream {
+    pub stream_index: usize,
+    pub codec_name: Option<String>,
+    display_line: String,
+    is_default: bool,
+}
+
+impl AudioStream {
+    pub fn new(
+        stream_index: usize,
+        codec_name: Option<String>,
+        display_line: impl Into<String>,
+        is_default: bool,
+    ) -> Self {
+        Self {
+            stream_index,
+            codec_name,
+            display_line: display_line.into(),
+            is_default,
+        }
+    }
+
+    pub fn display_line(&self) -> &str {
+        &self.display_line
+    }
+}
+
+trait DefaultTrack {
+    fn is_default(&self) -> bool;
+}
+
+impl DefaultTrack for VideoStream {
+    fn is_default(&self) -> bool {
+        self.is_default
+    }
+}
+
+impl DefaultTrack for AudioStream {
+    fn is_default(&self) -> bool {
+        self.is_default
+    }
+}
+
+fn default_index<T: DefaultTrack>(tracks: &[T]) -> usize {
+    tracks
+        .iter()
+        .position(DefaultTrack::is_default)
+        .unwrap_or(0)
+}
+
+/// How quickbridge should handle the selected audio track.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AudioHandling {
+    Copy,
+    TranscodeAlac,
+}
+
+/// Final user-selected stream combination.
+#[derive(Clone, Debug)]
+pub struct StreamSelection {
+    video: VideoStream,
+    audio: Option<AudioStream>,
+    audio_handling: Option<AudioHandling>,
+}
+
+impl StreamSelection {
+    pub fn new(video: VideoStream, audio: Option<AudioStream>) -> Self {
+        let audio_handling = audio.as_ref().map(|stream| {
+            if should_transcode_audio(stream.codec_name.as_deref()) {
+                AudioHandling::TranscodeAlac
+            } else {
+                AudioHandling::Copy
+            }
+        });
+
+        Self {
+            video,
+            audio,
+            audio_handling,
+        }
+    }
+
+    pub fn video_stream_index(&self) -> usize {
+        self.video.stream_index
+    }
+
+    pub fn audio_stream_index(&self) -> Option<usize> {
+        self.audio.as_ref().map(|stream| stream.stream_index)
+    }
+
+    pub fn audio_handling(&self) -> Option<&AudioHandling> {
+        self.audio_handling.as_ref()
+    }
+
+    pub fn render_output_file(&self) -> String {
+        let mut lines = vec![self.video.display_line().to_string()];
+        if let Some(audio) = &self.audio {
+            lines.push(audio.display_line().to_string());
+        }
+        lines.join("\n")
+    }
+
+    pub fn selected_audio_summary(&self) -> Option<String> {
+        self.audio
+            .as_ref()
+            .map(|audio| audio.display_line().to_string())
+    }
+
+    pub fn audio_notice(&self) -> Option<String> {
+        match (&self.audio, self.audio_handling()) {
+            (Some(audio), Some(AudioHandling::TranscodeAlac)) => Some(format!(
+                "Audio track #{} uses {}. quickbridge will convert it to ALAC so QuickTime Player can play it.",
+                audio.stream_index,
+                audio
+                    .codec_name
+                    .as_deref()
+                    .unwrap_or("an unsupported codec")
+            )),
+            _ => None,
+        }
+    }
+}
+
+fn should_transcode_audio(codec_name: Option<&str>) -> bool {
+    matches!(codec_name, Some("dts" | "truehd"))
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
+}
+
+fn display_stream_line(stream: &FfprobeStream) -> String {
+    match stream.codec_type.as_deref() {
+        Some("video") => display_video_stream_line(stream),
+        Some("audio") => display_audio_stream_line(stream),
+        _ => fallback_stream_line(stream),
+    }
+}
+
+fn display_video_stream_line(stream: &FfprobeStream) -> String {
+    let codec = stream.codec_name.as_deref().unwrap_or("unknown");
+    let profile_suffix = stream
+        .profile
+        .as_deref()
+        .filter(|profile| !profile.is_empty())
+        .map(|profile| format!(" ({profile})"))
+        .unwrap_or_default();
+
+    let mut details = Vec::new();
+    if let Some(pix_fmt) = stream.pix_fmt.as_deref().filter(|value| !value.is_empty()) {
+        let mut qualifiers = Vec::new();
+        if let Some(color_range) = stream
+            .color_range
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            qualifiers.push(color_range);
+        }
+        if let Some(color_space) = stream
+            .color_space
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            qualifiers.push(color_space);
+        }
+        if let Some(field_order) = stream
+            .field_order
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            qualifiers.push(field_order);
+        }
+        if qualifiers.is_empty() {
+            details.push(pix_fmt.to_string());
+        } else {
+            details.push(format!("{pix_fmt}({})", qualifiers.join(", ")));
+        }
+    }
+    if let (Some(width), Some(height)) = (stream.width, stream.height) {
+        details.push(format!("{width}x{height}"));
+    }
+
+    format!(
+        "Stream #0:{}{}: Video: {}{}{}{}",
+        stream.index,
+        language_suffix(stream.tags.as_ref()),
+        codec,
+        profile_suffix,
+        detail_suffix(&details),
+        default_suffix(stream)
+    )
+}
+
+fn display_audio_stream_line(stream: &FfprobeStream) -> String {
+    let codec = stream.codec_name.as_deref().unwrap_or("unknown");
+
+    let mut details = Vec::new();
+    if let Some(sample_rate) = stream
+        .sample_rate
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        details.push(format!("{sample_rate} Hz"));
+    }
+    if let Some(channel_layout) = stream
+        .channel_layout
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        details.push(channel_layout.to_string());
+    } else if let Some(channels) = stream.channels {
+        details.push(format_channel_count(channels));
+    }
+    if let Some(sample_fmt) = stream
+        .sample_fmt
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        details.push(sample_fmt.to_string());
+    }
+    if let Some(bit_rate) = stream
+        .bit_rate
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        details.push(format!("{} kb/s", bit_rate / 1000));
+    }
+
+    format!(
+        "Stream #0:{}{}: Audio: {}{}{}",
+        stream.index,
+        language_suffix(stream.tags.as_ref()),
+        codec,
+        detail_suffix(&details),
+        default_suffix(stream)
+    )
+}
+
+fn fallback_stream_line(stream: &FfprobeStream) -> String {
+    let kind = stream.codec_type.as_deref().unwrap_or("unknown");
+    let codec = stream.codec_name.as_deref().unwrap_or("unknown");
+    format!(
+        "Stream #0:{}: {}: {}",
+        stream.index,
+        capitalize(kind),
+        codec
+    )
+}
+
+fn capitalize(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+fn language_suffix(tags: Option<&FfprobeTags>) -> String {
+    tags.and_then(|tags| tags.language.as_deref())
+        .filter(|language| !language.is_empty() && *language != "und")
+        .map(|language| format!("({language})"))
+        .unwrap_or_default()
+}
+
+fn detail_suffix(details: &[String]) -> String {
+    if details.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", details.join(", "))
+    }
+}
+
+fn default_suffix(stream: &FfprobeStream) -> &'static str {
+    if stream
+        .disposition
+        .as_ref()
+        .and_then(FfprobeDisposition::is_default)
+        .unwrap_or(false)
+    {
+        " (default)"
+    } else {
+        ""
+    }
+}
+
+fn format_channel_count(channels: u32) -> String {
+    match channels {
+        1 => String::from("mono"),
+        2 => String::from("stereo"),
+        6 => String::from("5.1"),
+        8 => String::from("7.1"),
+        _ => format!("{channels} channels"),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeOutput {
+    #[serde(default)]
+    streams: Vec<FfprobeStream>,
+    format: Option<FfprobeFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeStream {
+    index: usize,
+    codec_type: Option<String>,
+    codec_name: Option<String>,
+    profile: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    pix_fmt: Option<String>,
+    color_range: Option<String>,
+    color_space: Option<String>,
+    field_order: Option<String>,
+    sample_fmt: Option<String>,
+    sample_rate: Option<String>,
+    channels: Option<u32>,
+    channel_layout: Option<String>,
+    bit_rate: Option<String>,
+    disposition: Option<FfprobeDisposition>,
+    tags: Option<FfprobeTags>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeFormat {
+    duration: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeTags {
+    language: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeDisposition {
+    default: Option<u8>,
+}
+
+impl FfprobeDisposition {
+    fn is_default(&self) -> Option<bool> {
+        self.default.map(|value| value != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AudioHandling, AudioStream, MediaInfo, SeekSupport, SourceInspection, SourceMetadata,
+        StreamSelection, TrackSelectionError, VideoStream,
+    };
+    use crate::Timecode;
+
+    #[test]
+    fn builds_default_selection_from_media_info() {
+        let media = MediaInfo::new(
+            vec![VideoStream::new(0, "Stream #0:0: Video: h264", true)],
+            vec![AudioStream::new(
+                1,
+                Some(String::from("aac")),
+                "Stream #0:1: Audio: aac",
+                true,
+            )],
+            Some(Timecode::from_seconds(60)),
+        );
+
+        let selection = media.default_selection().unwrap();
+        assert_eq!(selection.video_stream_index(), 0);
+        assert_eq!(selection.audio_stream_index(), Some(1));
+    }
+
+    #[test]
+    fn selection_request_requires_a_video_track() {
+        let media = MediaInfo::new(Vec::new(), Vec::new(), None);
+        assert_eq!(
+            media.selection_request().unwrap_err(),
+            TrackSelectionError::NoVideoTrack
+        );
+    }
+
+    #[test]
+    fn marks_dts_audio_for_transcode() {
+        let selection = StreamSelection::new(
+            VideoStream::new(0, "Stream #0:0: Video: h264", true),
+            Some(AudioStream::new(
+                1,
+                Some(String::from("dts")),
+                "Stream #0:1: Audio: dts",
+                true,
+            )),
+        );
+
+        assert_eq!(
+            selection.audio_handling(),
+            Some(&AudioHandling::TranscodeAlac)
+        );
+    }
+
+    #[test]
+    fn source_inspection_reports_seek_state() {
+        let inspection = SourceInspection::new(
+            SourceMetadata::new("video.mkv", Some(1024)),
+            SeekSupport::Disabled {
+                warning: String::from("No ranges"),
+            },
+        );
+
+        assert_eq!(inspection.metadata().filename(), "video.mkv");
+        assert_eq!(inspection.metadata().display_size(), "1.00 KiB");
+        assert_eq!(inspection.seek_warning(), Some("No ranges"));
+    }
+
+    #[test]
+    fn renders_input_and_output_streams_with_ffprobe_style() {
+        let media = MediaInfo::from_ffprobe_json(
+            r#"{
+              "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264", "profile": "High", "pix_fmt": "yuv420p", "width": 1920, "height": 1080, "disposition": {"default": 1}},
+                {"index": 1, "codec_type": "audio", "codec_name": "dts", "sample_rate": "48000", "channel_layout": "5.1", "sample_fmt": "fltp", "bit_rate": "1536000", "tags": {"language": "eng"}, "disposition": {"default": 1}},
+                {"index": 2, "codec_type": "subtitle", "codec_name": "subrip"}
+              ],
+              "format": {"duration": "1460.4"}
+            }"#,
+        )
+        .unwrap();
+
+        assert!(
+            media
+                .render_input_file()
+                .contains("Stream #0:1(eng): Audio: dts, 48000 Hz, 5.1, fltp, 1536 kb/s (default)")
+        );
+        assert_eq!(media.duration().unwrap().to_string(), "00:24:20");
+
+        let selection = media.default_selection().unwrap();
+        assert!(
+            selection
+                .render_output_file()
+                .contains("Stream #0:0: Video: h264 (High), yuv420p, 1920x1080 (default)")
+        );
+    }
+}

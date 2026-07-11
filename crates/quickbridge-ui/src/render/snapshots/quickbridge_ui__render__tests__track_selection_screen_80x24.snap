@@ -1,0 +1,20 @@
+---
+source: crates/quickbridge-ui/src/render/mod.rs
+assertion_line: 546
+expression: contents
+---
+quickbridge 0.1.0                                                               
+                                                                                
+Inspect source                                                                  
+✓ Checked source URL                                                            
+✓ Time jumps are available                                                      
+                                                                                
+Select tracks                                                                   
+Video                                                                           
+  Stream #0:0: Video: h264                                                      
+> Stream #0:2: Video: hevc                                                      
+                                                                                
+Audio                                                                           
+> Stream #0:1: Audio: aac                                                       
+                                                                                
+Arrow keys move • Enter confirm

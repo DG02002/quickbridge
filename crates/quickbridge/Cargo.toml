@@ -1,0 +1,30 @@
+[package]
+name = "quickbridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "A macOS-first QuickTime relay CLI built on ffmpeg"
+readme = "../../README.md"
+keywords = ["cli", "ffmpeg", "quicktime", "hls", "video"]
+categories = ["command-line-utilities", "multimedia::video"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+quickbridge-core = { path = "../quickbridge-core" }
+quickbridge-runtime = { path = "../quickbridge-runtime" }
+quickbridge-ui = { path = "../quickbridge-ui" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true

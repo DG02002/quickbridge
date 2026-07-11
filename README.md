@@ -1,5 +1,5 @@
 # quickbridge
- 
+
 > [!WARNING]
 > `quickbridge` is currently in an alpha stage. Expect bugs and breaking changes while the CLI contract is being stabilized.
 
@@ -19,7 +19,7 @@ lets you jump to new timestamps from the terminal without quitting QuickTime.
 Install from the local checkout during development:
 
 ```console
-$ cargo install --path .
+cargo install --path .
 ```
 
 Tagged release builds are also published on GitHub:
@@ -31,9 +31,14 @@ Homebrew support is coming soon.
 ## Usage
 
 ```console
-$ quickbridge "https://example.com/video.mkv"
-$ quickbridge --at 01:23:45 --port 50505 "https://example.com/video.mkv"
+quickbridge
+quickbridge "https://example.com/video.mkv"
+quickbridge --at 01:23:45 --port 50505 "https://example.com/video.mkv"
 ```
+
+Running `quickbridge` without a positional URL opens the TUI launcher. From
+there you can paste a media URL directly or enter `/url https://…` to start a
+session.
 
 When a source has multiple video or audio tracks, `quickbridge` inspects the
 stream layout with `ffprobe` and shows selection menus before playback starts.
@@ -45,10 +50,17 @@ Interactive commands:
 - Relative timestamps: `+30`, `-10`, `+01:30`
 - Operational commands: `status`, `help`, `quit`
 
-The CLI keeps a live status line above the prompt, for example
-`00:05:12 / 00:24:20`. In live mode, quickbridge polls QuickTime Player's
-front document playhead so the displayed source timestamp tracks pauses and
-other playback changes from the player window.
+Launcher commands:
+
+- `/url <media-url>`: open a source from inside the TUI
+- Direct URL paste: start immediately
+- `help`, `quit`
+
+The TUI keeps live relay telemetry above the command composer, including the
+current playback time, download speed, buffer ahead, and temp-session storage
+usage. In live mode, quickbridge polls QuickTime Player's front document
+playhead so the displayed source timestamp tracks pauses and other playback
+changes from the player window.
 
 ## Environment
 

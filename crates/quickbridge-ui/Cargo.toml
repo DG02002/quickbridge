@@ -1,0 +1,25 @@
+[package]
+name = "quickbridge-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+crossterm.workspace = true
+futures-util.workspace = true
+quickbridge-core = { path = "../quickbridge-core" }
+quickbridge-runtime = { path = "../quickbridge-runtime" }
+ratatui.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+vt100.workspace = true
