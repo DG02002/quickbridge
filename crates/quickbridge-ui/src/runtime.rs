@@ -65,8 +65,9 @@ impl TuiRuntime {
     }
 
     pub fn draw(&mut self, state: &AppState) -> Result<()> {
+        let full_screen = self.use_alt_screen;
         self.terminal
-            .draw(|frame| render::render(frame, state))
+            .draw(|frame| render::render(frame, state, full_screen))
             .map_err(|source| UiError::Terminal {
                 action: "draw the TUI",
                 source,

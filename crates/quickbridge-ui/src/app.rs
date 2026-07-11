@@ -21,6 +21,7 @@ use quickbridge_runtime::{
 use std::time::{Duration, Instant};
 
 const ACTIVE_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const MAX_ACTIVITY_ENTRIES: usize = 200;
 
 pub async fn run_interactive(
     cli: InteractiveOptions,
@@ -255,6 +256,11 @@ async fn run_live_loop(
                 runtime.draw(state)?;
             }
             AppEvent::Key(key_event) if should_handle_key(key_event) => {
+                if matches!(key_event.code, KeyCode::PageUp | KeyCode::PageDown) {
+                    state.scroll_activity(matches!(key_event.code, KeyCode::PageUp));
+                    runtime.draw(state)?;
+                    continue;
+                }
                 match handle_running_key_event(runtime, state, playback, key_event).await? {
                     RunningAction::Continue => {}
                     RunningAction::Completed => return Ok(RunOutcome::Completed),
@@ -305,7 +311,6 @@ async fn submit_input(
     if trimmed.is_empty() {
         return Ok(RunningAction::Continue);
     }
-    state.record_command(trimmed);
     let command = match parse_command(&line) {
         Ok(Some(command)) => command,
         Ok(None) => return Ok(RunningAction::Continue),
@@ -316,9 +321,13 @@ async fn submit_input(
         }
     };
 
+    if !matches!(command, PromptCommand::Help | PromptCommand::Status) {
+        state.record_command(trimmed);
+    }
+
     match command {
         PromptCommand::Help => {
-            state.push_history_info(help_text());
+            state.show_details(help_text());
         }
         PromptCommand::Reopen => {
             playback.reopen_player().await?;
@@ -328,7 +337,7 @@ async fn submit_input(
         PromptCommand::Status => {
             let snapshot = playback.snapshot(Instant::now()).await;
             state.update_snapshot(snapshot);
-            state.push_history_info(state.status_text());
+            state.toggle_status_details();
         }
         PromptCommand::Quit => return Ok(RunningAction::Completed),
         PromptCommand::JumpAbsolute(_) | PromptCommand::JumpRelative(_) => {
@@ -580,6 +589,8 @@ pub(crate) struct RunningState {
     pub(crate) prepare_history: Vec<HistoryEntry>,
     pub(crate) startup_history: Vec<HistoryEntry>,
     pub(crate) history: Vec<HistoryEntry>,
+    pub(crate) details: Option<String>,
+    pub(crate) activity_scroll: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -638,6 +649,8 @@ impl RunningState {
             prepare_history: Vec::new(),
             startup_history: Vec::new(),
             history,
+            details: None,
+            activity_scroll: 0,
         }
     }
 
@@ -705,6 +718,16 @@ impl RunningState {
             lines.push(audio_notice);
         }
         lines.join("\n")
+    }
+
+    fn trim_history(&mut self) {
+        if self.history.len() > MAX_ACTIVITY_ENTRIES {
+            self.history
+                .drain(..self.history.len() - MAX_ACTIVITY_ENTRIES);
+        }
+        self.activity_scroll = self
+            .activity_scroll
+            .min(self.history.len().saturating_sub(1));
     }
 }
 
@@ -954,6 +977,7 @@ impl AppState {
             }
             Screen::Running(running) => {
                 push_history_lines(&mut running.history, "›", command, HistoryTone::Command);
+                running.trim_history();
             }
             _ => {}
         }
@@ -977,7 +1001,8 @@ impl AppState {
                 push_history_lines(&mut launcher.history, prefix, text, tone)
             }
             Screen::Running(running) => {
-                push_history_lines(&mut running.history, prefix, text, tone)
+                push_history_lines(&mut running.history, prefix, text, tone);
+                running.trim_history();
             }
             _ => {}
         }
@@ -987,6 +1012,33 @@ impl AppState {
         match &self.screen {
             Screen::Running(running) => running.status_text(),
             _ => String::new(),
+        }
+    }
+
+    fn show_details(&mut self, details: impl Into<String>) {
+        if let Screen::Running(running) = &mut self.screen {
+            running.details = Some(details.into());
+        }
+    }
+
+    fn toggle_status_details(&mut self) {
+        let details = self.status_text();
+        if let Screen::Running(running) = &mut self.screen {
+            if running.details.as_deref() == Some(details.as_str()) {
+                running.details = None;
+            } else {
+                running.details = Some(details);
+            }
+        }
+    }
+
+    fn scroll_activity(&mut self, older: bool) {
+        if let Screen::Running(running) = &mut self.screen {
+            running.activity_scroll = if older {
+                (running.activity_scroll + 1).min(running.history.len().saturating_sub(1))
+            } else {
+                running.activity_scroll.saturating_sub(1)
+            };
         }
     }
 
@@ -1259,8 +1311,41 @@ fn poll_for_interrupt() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, Screen, SelectionFocus, TrackSelectionState};
-    use quickbridge_core::{AudioStream, MediaInfo, VideoStream};
+    use super::{
+        AppState, RunningState, Screen, SelectionFocus, StartupContext, TrackSelectionState,
+    };
+    use quickbridge_core::{
+        AudioStream, MediaInfo, PlaybackMode, PlaybackSnapshot, PlayerState, SeekSupport,
+        SourceInspection, SourceMetadata, StreamSelection, StreamTelemetry, Timecode, VideoStream,
+    };
+
+    fn running_state() -> AppState {
+        let running = RunningState::new(
+            String::from("https://example.com/video.mkv"),
+            PlaybackMode::Live,
+            StreamSelection::new(VideoStream::new(0, "video", true), None),
+            SourceInspection::new(
+                SourceMetadata::new("video.mkv", Some(42)),
+                SeekSupport::Enabled,
+            ),
+            MediaInfo::new(Vec::new(), Vec::new(), Some(Timecode::from_seconds(120))),
+            PlaybackSnapshot::new(
+                7,
+                String::from("http://127.0.0.1:1234/stream.m3u8?session=7"),
+                Timecode::ZERO,
+                Timecode::from_seconds(12),
+                PlayerState::Playing,
+                StreamTelemetry::new(1, 2, Timecode::from_seconds(6)),
+            ),
+            StartupContext {
+                requested_start_at: Timecode::ZERO,
+                actual_start_at: Timecode::ZERO,
+            },
+        );
+        let mut state = AppState::new(None);
+        state.screen = Screen::Running(Box::new(running));
+        state
+    }
 
     #[test]
     fn switching_track_focus_preserves_both_selections() {
@@ -1293,5 +1378,47 @@ mod tests {
         assert_eq!(selection.focus, SelectionFocus::Audio);
         assert_eq!(selection.video_index, 1);
         assert_eq!(selection.audio_index, Some(1));
+    }
+
+    #[test]
+    fn running_activity_retains_only_the_latest_two_hundred_entries() {
+        let mut state = running_state();
+        for index in 0..1_000 {
+            state.push_history_info(format!("activity {index}"));
+        }
+
+        let Screen::Running(running) = &state.screen else {
+            unreachable!();
+        };
+        assert_eq!(running.history.len(), 200);
+        assert_eq!(running.history.first().unwrap().text, "activity 800");
+        assert_eq!(running.history.last().unwrap().text, "activity 999");
+    }
+
+    #[test]
+    fn status_details_toggle_without_growing_activity() {
+        let mut state = running_state();
+        let initial_len = match &state.screen {
+            Screen::Running(running) => running.history.len(),
+            _ => unreachable!(),
+        };
+
+        state.toggle_status_details();
+        let Screen::Running(running) = &state.screen else {
+            unreachable!();
+        };
+        let details = running.details.as_deref().unwrap();
+        assert!(details.contains("Source             | https://example.com/video.mkv"));
+        assert!(details.contains("Session ID         | 7"));
+        assert!(details.contains("Tracks"));
+        assert!(details.contains("QuickTime Player   | Playing"));
+        assert_eq!(running.history.len(), initial_len);
+
+        state.toggle_status_details();
+        let Screen::Running(running) = &state.screen else {
+            unreachable!();
+        };
+        assert!(running.details.is_none());
+        assert_eq!(running.history.len(), initial_len);
     }
 }

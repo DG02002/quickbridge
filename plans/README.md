@@ -21,7 +21,7 @@ legacy `src/` tree.
 | 004 | Establish a real-media HDR/DV performance regression gate | P1 | M | 001, 002, 003 | BLOCKED (network below 1.5x UHD peak; repeat gate pending) |
 | 005 | Make the full-screen TUI the primary interactive surface | P1 | M | — | DONE |
 | 006 | Make track selection focused, compact, and keyboard-clear | P1 | M | 001, 005 | DONE |
-| 007 | Replace the running transcript with a responsive live dashboard | P1 | L | 002, 003, 005 | TODO |
+| 007 | Replace the running transcript with a responsive live dashboard | P1 | L | 002, 003, 005 | DONE |
 | 008 | Keep recoverable source and player errors inside the TUI | P2 | M | 005, 007 | TODO |
 | 009 | Replace command-shell interaction with native TUI actions | P1 | L | 005, 006, 007, 008 | TODO |
 
