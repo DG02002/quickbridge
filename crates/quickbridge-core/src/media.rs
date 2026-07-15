@@ -313,11 +313,34 @@ pub enum MediaInfoParseError {
     InvalidJson(#[from] serde_json::Error),
 }
 
-/// Apple-compatible packaging for a selected video stream.
+/// Apple-oriented MP4 packaging for a selected video stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum VideoPackaging {
-    Avc,
-    Hevc { tag: &'static str, unofficial: bool },
+pub struct VideoPackaging {
+    tag: &'static str,
+    bitstream_filter: Option<&'static str>,
+    unofficial: bool,
+}
+
+impl VideoPackaging {
+    fn new(tag: &'static str, bitstream_filter: Option<&'static str>, unofficial: bool) -> Self {
+        Self {
+            tag,
+            bitstream_filter,
+            unofficial,
+        }
+    }
+
+    pub fn tag(&self) -> &'static str {
+        self.tag
+    }
+
+    pub fn bitstream_filter(&self) -> Option<&'static str> {
+        self.bitstream_filter
+    }
+
+    pub fn is_unofficial(&self) -> bool {
+        self.unofficial
+    }
 }
 
 /// Why a selected video stream cannot be safely packaged for Apple playback.
@@ -329,13 +352,6 @@ pub enum VideoPackagingError {
     UnsupportedCodec { stream_index: usize, codec: String },
     #[error("video stream #{stream_index} uses unsupported Dolby Vision profile {profile}")]
     UnsupportedDolbyVisionProfile { stream_index: usize, profile: u8 },
-    #[error(
-        "Dolby Vision Profile 8 stream #{stream_index} has unsupported compatibility ID {compatibility_id}"
-    )]
-    UnsupportedDolbyVisionCompatibility {
-        stream_index: usize,
-        compatibility_id: u8,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -454,36 +470,26 @@ impl VideoStream {
 
     pub fn apple_packaging(&self) -> Result<VideoPackaging, VideoPackagingError> {
         match self.codec_name.as_deref() {
-            Some("h264") => Ok(VideoPackaging::Avc),
+            Some("h264") => match self.dolby_vision.as_ref() {
+                None => Ok(VideoPackaging::new("avc1", None, false)),
+                Some(config) if config.profile == 9 => Ok(VideoPackaging::new("dva1", None, true)),
+                Some(config) => Err(VideoPackagingError::UnsupportedDolbyVisionProfile {
+                    stream_index: self.stream_index,
+                    profile: config.profile,
+                }),
+            },
             Some("hevc") => match self.dolby_vision.as_ref() {
-                None => Ok(VideoPackaging::Hevc {
-                    tag: "hvc1",
-                    unofficial: false,
-                }),
-                Some(config) if config.profile == 5 => Ok(VideoPackaging::Hevc {
-                    tag: "dvh1",
-                    unofficial: true,
-                }),
-                Some(config)
-                    if config.profile == 8
-                        && matches!(config.base_layer_signal_compatibility_id, 1 | 4) =>
-                {
-                    Ok(VideoPackaging::Hevc {
-                        tag: "hvc1",
-                        unofficial: false,
-                    })
-                }
-                Some(config) if config.profile == 8 => {
-                    Err(VideoPackagingError::UnsupportedDolbyVisionCompatibility {
-                        stream_index: self.stream_index,
-                        compatibility_id: config.base_layer_signal_compatibility_id,
-                    })
+                None => Ok(VideoPackaging::new("hvc1", Some("hevc_metadata"), false)),
+                Some(config) if matches!(config.profile, 5 | 8) => {
+                    Ok(VideoPackaging::new("dvh1", Some("hevc_metadata"), true))
                 }
                 Some(config) => Err(VideoPackagingError::UnsupportedDolbyVisionProfile {
                     stream_index: self.stream_index,
                     profile: config.profile,
                 }),
             },
+            Some("av1") => Ok(VideoPackaging::new("av01", None, false)),
+            Some("vc1") => Ok(VideoPackaging::new("vc-1", None, false)),
             Some(codec) => Err(VideoPackagingError::UnsupportedCodec {
                 stream_index: self.stream_index,
                 codec: codec.to_string(),
@@ -964,28 +970,35 @@ mod tests {
         let cases = [
             (
                 r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}"#,
-                Ok(VideoPackaging::Avc),
+                Ok(VideoPackaging::new("avc1", None, false)),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":9,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":1}]}]}"#,
+                Ok(VideoPackaging::new("dva1", None, true)),
             ),
             (
                 include_str!("../tests/fixtures/hevc-bt709.json"),
-                Ok(VideoPackaging::Hevc {
-                    tag: "hvc1",
-                    unofficial: false,
-                }),
+                Ok(VideoPackaging::new("hvc1", Some("hevc_metadata"), false)),
             ),
             (
                 include_str!("../tests/fixtures/hdr10-pq.json"),
-                Ok(VideoPackaging::Hevc {
-                    tag: "hvc1",
-                    unofficial: false,
-                }),
+                Ok(VideoPackaging::new("hvc1", Some("hevc_metadata"), false)),
             ),
             (
                 include_str!("../tests/fixtures/dv-p5.json"),
-                Ok(VideoPackaging::Hevc {
-                    tag: "dvh1",
-                    unofficial: true,
-                }),
+                Ok(VideoPackaging::new("dvh1", Some("hevc_metadata"), true)),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"hevc","side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":4}]}]}"#,
+                Ok(VideoPackaging::new("dvh1", Some("hevc_metadata"), true)),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"av1"}]}"#,
+                Ok(VideoPackaging::new("av01", None, false)),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"vc1"}]}"#,
+                Ok(VideoPackaging::new("vc-1", None, false)),
             ),
         ];
         for (json, expected) in cases {
@@ -1000,14 +1013,6 @@ mod tests {
 
         let rejected = [
             (
-                "vc1",
-                None,
-                VideoPackagingError::UnsupportedCodec {
-                    stream_index: 0,
-                    codec: String::from("vc1"),
-                },
-            ),
-            (
                 "hevc",
                 Some((7, 0)),
                 VideoPackagingError::UnsupportedDolbyVisionProfile {
@@ -1016,11 +1021,11 @@ mod tests {
                 },
             ),
             (
-                "hevc",
-                Some((8, 2)),
-                VideoPackagingError::UnsupportedDolbyVisionCompatibility {
+                "h264",
+                Some((5, 0)),
+                VideoPackagingError::UnsupportedDolbyVisionProfile {
                     stream_index: 0,
-                    compatibility_id: 2,
+                    profile: 5,
                 },
             ),
         ];

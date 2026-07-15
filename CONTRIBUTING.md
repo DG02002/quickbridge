@@ -1,74 +1,60 @@
-# Contributing
+# Contributing to quickbridge
 
-## Requirements
+This guide covers local development, verification, and release checks. See the [README](./README.md) for installation and product usage.
 
-- macOS
-- Rust toolchain `1.94`
-- `ffmpeg` available on `PATH`
-- `ffprobe` available on `PATH`
+## Set up the project
 
-Install the standard Rust components once:
+You need macOS, Rust `1.94`, `ffmpeg`, and `ffprobe`. Install the Rust components used by the project:
 
 ```console
 rustup component add rustfmt clippy rust-analyzer
 ```
 
-Cargo aliases are configured in [`.cargo/config.toml`](./.cargo/config.toml):
+Build and run quickbridge from the workspace:
 
 ```console
-cargo check-all
-cargo fmt-check
-cargo lint
-cargo xtest
+cargo build
+cargo run -- "https://example.com/video.mkv"
 ```
 
-## Development workflow
+Use an optimized build when testing release behavior:
 
-Run the full local verification flow before committing:
+```console
+cargo build --release
+```
+
+## Explore without external tools
+
+Use the UI tour to test the full flow without `ffmpeg`, `ffprobe`, QuickTime, networking, or a media URL:
+
+```console
+cargo run -p quickbridge -- --simulate ui-tour
+```
+
+Use `--simulate happy-path` to test the launcher. Use `--simulate no-ranges` to verify behavior when a media source doesn't support seeking.
+
+## Verify changes
+
+Run the complete verification sequence before committing:
 
 ```console
 cargo fmt --all
 cargo check-all
 cargo lint
 cargo xtest
-cargo package --allow-dirty
-cargo publish --dry-run
+cargo package --workspace --allow-dirty
 ```
 
-`cargo` aliases can only wrap a single Cargo command, so the project keeps the
-full verification flow as a short sequence instead of adding a custom task runner.
+The aliases in [`.cargo/config.toml`](./.cargo/config.toml) map to individual Cargo commands. The test suite covers timestamp parsing, session transitions, server path safety, and mocked `ffmpeg` lifecycle behavior.
 
-## Running locally
+Complete a manual macOS smoke test with `cargo run` to verify QuickTime integration. You can override local binary paths with `QUICKBRIDGE_FFMPEG_BIN` and `QUICKBRIDGE_FFPROBE_BIN`.
 
-Run the CLI with a source URL:
+## Prepare a release
 
-```console
-cargo run -- "https://example.com/video.mkv"
-```
+Follow the [release checklist](./docs/release-checklist.md) before publishing. Keep command output aligned with the [CLI writing guide](./docs/cli-writing.md).
 
-Start from a timestamp and a fixed port:
+quickbridge follows Semantic Versioning before `1.0.0`:
 
-```console
-cargo run -- --at 01:23:45 --port 50505 "https://example.com/video.mkv"
-```
-
-Build a development binary:
-
-```console
-cargo build
-```
-
-Build an optimized release binary:
-
-```console
-cargo build --release
-```
-
-## Test notes
-
-- `QUICKBRIDGE_FFMPEG_BIN` overrides the `ffmpeg` executable path for local testing.
-- `QUICKBRIDGE_FFPROBE_BIN` overrides the `ffprobe` executable path for local testing.
-- The automated test suite covers timestamp parsing, session transitions, server path safety, and mocked `ffmpeg` lifecycle behavior.
-- Real QuickTime behavior still needs a manual macOS smoke test with `cargo run`.
-- See [docs/release-checklist.md](./docs/release-checklist.md) before cutting a public release.
-- Keep CLI wording aligned with [docs/cli-writing.md](./docs/cli-writing.md).
+- Patch releases contain backward-compatible fixes and polish
+- Minor releases may change the command-line interface
+- `1.0.0` marks the first stable command-line interface contract

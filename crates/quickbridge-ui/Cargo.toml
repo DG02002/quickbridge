@@ -14,8 +14,8 @@ workspace = true
 [dependencies]
 crossterm.workspace = true
 futures-util.workspace = true
-quickbridge-core = { version = "0.1.0", path = "../quickbridge-core" }
-quickbridge-runtime = { version = "0.1.0", path = "../quickbridge-runtime" }
+quickbridge-core = { version = "0.2.0", path = "../quickbridge-core" }
+quickbridge-runtime = { version = "0.2.0", path = "../quickbridge-runtime" }
 ratatui.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

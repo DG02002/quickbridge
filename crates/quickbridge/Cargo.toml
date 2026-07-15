@@ -18,9 +18,9 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-quickbridge-core = { version = "0.1.0", path = "../quickbridge-core" }
-quickbridge-runtime = { version = "0.1.0", path = "../quickbridge-runtime" }
-quickbridge-ui = { version = "0.1.0", path = "../quickbridge-ui" }
+quickbridge-core = { version = "0.2.0", path = "../quickbridge-core" }
+quickbridge-runtime = { version = "0.2.0", path = "../quickbridge-runtime" }
+quickbridge-ui = { version = "0.2.0", path = "../quickbridge-ui" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -1291,7 +1291,7 @@ mod tests {
     #[test]
     fn launcher_screen_renders_clean_entrypoint() {
         let mut state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::new(),
             prepare_history: Vec::new(),
             screen: Screen::Launcher(LauncherState {
@@ -1321,7 +1321,7 @@ mod tests {
     #[test]
     fn source_error_screen_renders_recovery_actions_at_supported_sizes() {
         let state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::from("https://example.com/broken.mkv"),
             prepare_history: Vec::new(),
             screen: Screen::SourceError(SourceErrorState {
@@ -1360,7 +1360,7 @@ mod tests {
         );
         let request = media_info.selection_request().unwrap();
         let mut state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::from("https://example.com/video.mkv"),
             prepare_history: vec![
                 HistoryEntry {
@@ -1383,7 +1383,7 @@ mod tests {
         };
 
         let contents = render_contents_with_size(&state, 80, 24);
-        assert!(contents.contains("quickbridge v0.1.0"));
+        assert!(contents.contains("quickbridge v0.2.0"));
         assert!(contents.contains("› H.264 • Unknown resolution • SDR"));
         assert_eq!(contents.matches('›').count(), 1);
         assert!(contents.contains("✓ Unknown language • AAC • default"));
@@ -1416,7 +1416,7 @@ mod tests {
         )
         .unwrap();
         let state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::new(),
             prepare_history: Vec::new(),
             screen: Screen::TrackSelection(TrackSelectionState {
@@ -1450,7 +1450,7 @@ mod tests {
             None,
         );
         let state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::new(),
             prepare_history: Vec::new(),
             screen: Screen::TrackSelection(TrackSelectionState {
@@ -1554,14 +1554,14 @@ mod tests {
         jump_progress.start(JumpStep::RefreshPlayer, Vec::new());
         running.jump_progress = Some(jump_progress);
         let mut state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::from("https://example.com/video.mkv"),
             prepare_history: Vec::new(),
             screen: Screen::Running(Box::new(running)),
         };
 
         let contents = render_contents(&state);
-        assert!(contents.contains("quickbridge v0.1.0"));
+        assert!(contents.contains("quickbridge v0.2.0"));
         assert!(!contents.contains("Simulation"));
         assert!(contents.contains("00:00:12 / 00:02:00"));
         assert!(contents.contains("Relay 3.0 MB/s"));
@@ -1699,7 +1699,7 @@ mod tests {
         running.input_cursor = running.input.len();
 
         let state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::from("https://example.com/video.mkv"),
             prepare_history: Vec::new(),
             screen: Screen::Running(Box::new(running)),
@@ -1732,7 +1732,7 @@ mod tests {
         progress.finish(LaunchStep::LocalStreamServer);
         progress.start(LaunchStep::Relay, Vec::new());
         let state = AppState {
-            version: String::from("quickbridge 0.1.0"),
+            version: String::from("quickbridge 0.2.0"),
             source_url: String::from("https://example.com/video.mkv"),
             prepare_history: Vec::new(),
             screen: Screen::Starting {
@@ -1756,7 +1756,7 @@ mod tests {
         };
 
         let contents = render_contents(&state);
-        assert!(contents.contains("quickbridge v0.1.0"));
+        assert!(contents.contains("quickbridge v0.2.0"));
         assert!(contents.contains("HEVC • 3840×2160 • HDR10"));
         assert!(contents.contains("✓ Started local stream server"));
         assert!(contents.contains("Starting ffmpeg relay"));

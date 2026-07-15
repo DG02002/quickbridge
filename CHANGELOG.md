@@ -7,23 +7,33 @@ the published CLI contract.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-15
+
 ### Added
 
-- Release metadata for crates.io publishing
-- CLI contract tests for help, version, usage errors, and environment checks
-- GitHub Actions CI workflow for the release gates
-- GitHub release workflow for tagged macOS binaries
-- CLI writing guide and release checklist
+- Interactive launcher, track selection, and live playback dashboard
+- Absolute and relative timestamp jumps during playback
+- Playback commands, telemetry, and recoverable errors in the terminal interface
+- High dynamic range (HDR) and Dolby Vision support for compatible media
+- Simulation modes for testing without media or external tools
 
 ### Changed
 
-- Updated the project version to `0.1.0`
-- Converted the crate to a CLI-only public product
-- Added structured debug logging with `--verbose` and `RUST_LOG`
-- Standardized error and status message wording
+- Improved high-bitrate streaming and QuickTime compatibility
+- Improved compact terminal layouts and inline display mode
+- Updated dependencies and reorganized the project into workspace crates
+- Updated product documentation and release automation
+
+### Removed
+
+- Internal implementation plans from the published repository tree
 
 ## [0.1.0] - 2026-04-06
 
 ### Added
 
 - Initial public release candidate
+
+[Unreleased]: https://github.com/DG02002/quickbridge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DG02002/quickbridge/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/DG02002/quickbridge/releases/tag/v0.1.0

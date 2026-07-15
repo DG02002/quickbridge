@@ -171,9 +171,8 @@ mod tests {
 
     #[test]
     fn extracts_filename_from_path_query() {
-        let filename =
-            filename_from_url("https://example.com/raw?path=/folder/Kaiju.No.8.S03E01.mkv");
-        assert_eq!(filename, "Kaiju.No.8.S03E01.mkv");
+        let filename = filename_from_url("https://example.com/raw?path=/folder/sample-video.mkv");
+        assert_eq!(filename, "sample-video.mkv");
     }
 
     #[test]

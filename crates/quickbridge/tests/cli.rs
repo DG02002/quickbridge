@@ -29,7 +29,7 @@ fn version_prints_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("quickbridge 0.1.0"));
+        .stdout(predicate::str::contains("quickbridge 0.2.0"));
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn scripted_simulation_happy_path_runs_without_ansi_noise() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("quickbridge 0.1.0"))
+        .stdout(predicate::str::contains("quickbridge 0.2.0"))
         .stdout(predicate::str::contains("Inspect source"))
         .stdout(predicate::str::contains("Start session"))
         .stdout(predicate::str::contains("Getting ready to jump"))

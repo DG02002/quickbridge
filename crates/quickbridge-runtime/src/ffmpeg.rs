@@ -1,5 +1,5 @@
 use crate::{Result, RuntimeError, diagnostics::render_command, session::SessionPaths};
-use quickbridge_core::{AudioHandling, StreamSelection, Timecode, VideoPackaging};
+use quickbridge_core::{AudioHandling, StreamSelection, Timecode};
 use std::{ffi::OsString, path::Path, process::Stdio, time::Duration};
 use tokio::{
     fs,
@@ -162,14 +162,14 @@ fn build_args(
 
     args.extend([OsString::from("-sn"), OsString::from("-dn")]);
     args.extend([OsString::from("-c:v"), OsString::from("copy")]);
-    if let VideoPackaging::Hevc { tag, unofficial } = packaging {
-        // Populate the out-of-band VPS/SPS/PPS required by hvc1/dvh1 when
-        // stream-copying sources that carry parameter sets in-band.
-        args.extend([OsString::from("-bsf:v"), OsString::from("hevc_metadata")]);
-        args.extend([OsString::from("-tag:v"), OsString::from(tag)]);
-        if unofficial {
-            args.extend([OsString::from("-strict"), OsString::from("unofficial")]);
-        }
+    if let Some(filter) = packaging.bitstream_filter() {
+        // Populate out-of-band parameter sets when stream-copying HEVC sources
+        // that carry them in-band.
+        args.extend([OsString::from("-bsf:v"), OsString::from(filter)]);
+    }
+    args.extend([OsString::from("-tag:v"), OsString::from(packaging.tag())]);
+    if packaging.is_unofficial() {
+        args.extend([OsString::from("-strict"), OsString::from("unofficial")]);
     }
     match selection.audio_handling() {
         Some(AudioHandling::Copy) => {
@@ -444,7 +444,7 @@ mod tests {
         let cases = [
             (
                 r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264"}]}"#,
-                None,
+                Some("avc1"),
             ),
             (
                 r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"hevc","color_transfer":"smpte2084"}]}"#,
@@ -453,6 +453,22 @@ mod tests {
             (
                 r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"hevc","side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":5,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":0}]}]}"#,
                 Some("dvh1"),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"hevc","side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":4}]}]}"#,
+                Some("dvh1"),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264","side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":9,"dv_level":6,"bl_present_flag":1,"el_present_flag":0,"dv_bl_signal_compatibility_id":1}]}]}"#,
+                Some("dva1"),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"av1"}]}"#,
+                Some("av01"),
+            ),
+            (
+                r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"vc1"}]}"#,
+                Some("vc-1"),
             ),
         ];
         for (json, tag) in cases {
@@ -480,9 +496,9 @@ mod tests {
                 args.windows(2)
                     .find(|pair| pair[0] == "-bsf:v")
                     .map(|pair| pair[1].as_str()),
-                tag.map(|_| "hevc_metadata")
+                matches!(tag, Some("hvc1" | "dvh1")).then_some("hevc_metadata")
             );
-            if tag == Some("dvh1") {
+            if matches!(tag, Some("dvh1" | "dva1")) {
                 assert!(
                     args.windows(2)
                         .any(|pair| pair == ["-strict", "unofficial"])
@@ -491,7 +507,7 @@ mod tests {
         }
 
         let selection = quickbridge_core::MediaInfo::from_ffprobe_json(
-            r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"vc1"}]}"#,
+            r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"vp9"}]}"#,
         )
         .unwrap()
         .default_selection()
