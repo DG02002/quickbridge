@@ -2,12 +2,12 @@
 
 `quickbridge` plays remote media in QuickTime Player while you control playback from your terminal. It relays the source through `ffmpeg`, serves a local HTTP Live Streaming (HLS) stream, and supports timestamp jumps without restarting QuickTime.
 
-> [!INFO]
+> [!NOTE]
 > `quickbridge` is an experiment and may not work with every media source. Subtitle playback isn't supported. If you want to help revive the project or suggest an improvement, [open an issue](https://github.com/DG02002/quickbridge/issues).
 
 ## Demo
 
-[Watch the quickbridge demo](./assets/demo/quickbridge-demo.mp4) to see the launcher, track selection, relay startup, and playback controls.
+![DEMO](https://github.com/user-attachments/assets/747f3906-3079-4ae2-8ca4-dfbe64ab0ede) to see the launcher, track selection, relay startup, and playback controls.
 
 ## Requirements
 
