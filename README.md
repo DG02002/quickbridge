@@ -17,6 +17,12 @@ Select the preview to watch the full demo with the launcher, track selection, re
 - `ffmpeg` and `ffprobe` available on `PATH`
 - An interactive terminal
 
+## Limitations
+
+quickbridge is an experiment, not a complete media player replacement. This workaround may not work with every media source, and subtitle playback isn't supported.
+
+If you want to help revive the project or suggest an improvement, [open an issue](https://github.com/DG02002/quickbridge/issues).
+
 ## Install
 
 Download `quickbridge-aarch64-apple-darwin.tar.gz` from [GitHub Releases](https://github.com/DG02002/quickbridge/releases), then extract and run it:
