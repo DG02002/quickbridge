@@ -7,7 +7,9 @@
 
 ## Demo
 
-[Watch the quickbridge demo](./assets/demo/quickbridge-demo.mp4) to see the launcher, track selection, relay startup, and playback controls.
+[![quickbridge demo showing the terminal interface](./assets/demo/quickbridge-demo.gif)](./assets/demo/quickbridge-demo.mp4)
+
+Select the preview to watch the full demo with the launcher, track selection, relay startup, and playback controls.
 
 ## Requirements
 
