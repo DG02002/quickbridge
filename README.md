@@ -5,7 +5,7 @@
 > [!NOTE]
 > `quickbridge` is an experiment and may not work with every media source. Subtitle playback isn't supported. If you want to help revive the project or suggest an improvement, [open an issue](https://github.com/DG02002/quickbridge/issues).
 
-<https://github.com/user-attachments/assets/6940ceac-1d60-4a32-8df3-9c42d3137f05>>
+<https://github.com/user-attachments/assets/6940ceac-1d60-4a32-8df3-9c42d3137f05>
 
 ## Requirements
 
